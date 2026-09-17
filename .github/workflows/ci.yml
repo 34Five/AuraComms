@@ -12,35 +12,29 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# The steps live in 34Five/.github and are shared by every repository, so the toolchain
-# pin and the scan policy cannot drift apart per repository. What stays here is what a
-# composite action cannot set: the runner, the timeout, the concurrency group — and the
-# JOB NAMES, which are the strings a branch ruleset matches on. Keep them spelled exactly
-# as AuraLayer spells them, so one org-level ruleset can require both everywhere.
 jobs:
   check:
     name: Check (typecheck + test)
+    # Pinned rather than `ubuntu-latest`: an image roll must be a change someone makes,
+    # not one that arrives. Same reason the bun version below is pinned, and the same
+    # pin as AuraLayer — the two repos share a toolchain on purpose.
     runs-on: ubuntu-24.04
     # Unbounded, a hung worker test holds a runner for the six-hour default before
     # anyone is told.
     timeout-minutes: 20
     steps:
-      # BOOTSTRAP GUARD — DELETE THIS STEP, THE CHECKOUT ABOVE IT, AND THE `if:` BELOW,
-      # IN THE COMMIT THAT ADDS package.json.
+      - uses: actions/checkout@v4
+      # BOOTSTRAP GUARD — DELETE WITH THE FIRST REAL COMMIT.
       #
-      # CI is deliberately in place before the code, so the first PR lands under the gate
-      # instead of the gate being retrofitted around work that already merged. Until a
-      # `package.json` exists there is nothing to install, typecheck or test, and the
-      # shared action would fail on an empty repository rather than on a real fault.
+      # This workflow is deliberately in place before the code is, so the first PR lands
+      # under the gate instead of the gate being retrofitted around existing work. Until
+      # a `package.json` exists there is nothing to install, typecheck or test, and the
+      # steps below would fail on an empty repository rather than on a real fault.
       #
       # A job that passes while proving nothing is its own hazard, so this does not hide:
       # it annotates every run it skips, and the condition closes itself the moment the
-      # project is scaffolded. The guard is local on purpose — a temporary state of THIS
-      # repository does not belong in an action every repository shares.
-      #
-      # The checkout is here only because the guard reads the working tree. The shared
-      # action does its own checkout, so once the guard goes, this goes with it.
-      - uses: actions/checkout@v7.0.1
+      # project is scaffolded. Whoever adds `package.json` should delete this step and the
+      # `if:` guards beneath it in the same commit.
       - name: Project scaffolded yet?
         id: scaffold
         run: |
@@ -48,16 +42,50 @@ jobs:
             echo "present=true" >> "$GITHUB_OUTPUT"
           else
             echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::warning title=CI is not yet proving anything::No package.json in this repository, so typecheck and test were skipped. This guard exists only until the project is scaffolded — delete it, and the if: condition below, in the commit that adds package.json."
+            echo "::warning title=CI is not yet proving anything::No package.json in this repository, so typecheck and test were skipped. This guard exists only until the project is scaffolded — delete it, and the if: conditions below, in the commit that adds package.json."
           fi
-      - uses: 34Five/.github/actions/bun-check@v1
+      - uses: oven-sh/setup-bun@v2
+        if: steps.scaffold.outputs.present == 'true'
+        with:
+          # Pinned: `latest` makes builds non-reproducible across runs. Held equal to
+          # AuraLayer's pin; bump both together.
+          bun-version: 1.3.11
+      - run: bun install --frozen-lockfile
+        if: steps.scaffold.outputs.present == 'true'
+      - run: bun run typecheck
+        if: steps.scaffold.outputs.present == 'true'
+      # Three passes, matching AuraLayer: a Workers test suite that shares one D1/DO
+      # storage across files and runs single-worker turns an order-dependent leak between
+      # files into an intermittent failure, which one pass will not reliably show.
+      # Revisit this line if this repository's suite does not share storage.
+      - run: for i in 1 2 3; do echo "::group::test run $i"; bun run test || exit 1; echo "::endgroup::"; done
         if: steps.scaffold.outputs.present == 'true'
 
+  # Secrets belong in `wrangler secret put`, never in the repository — this is what will
+  # keep that true rather than customary. A standing gate, never conditional: it costs
+  # seconds, and it is fully meaningful from the first commit, unlike the job above.
   secrets:
     name: Secrets (gitleaks)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    # Never conditional and never guarded: it costs seconds, and unlike the job above it
-    # is fully meaningful from the first commit. Secrets belong in `wrangler secret put`.
     steps:
-      - uses: 34Five/.github/actions/secret-scan@v1
+      - uses: actions/checkout@v4
+        with:
+          # Full history, so a key buried in an earlier commit blocks too, not just the diff.
+          fetch-depth: 0
+      # The CLI directly, pinned: the gitleaks-action wrapper requires an organization
+      # licence key, the binary does not.
+      - name: Install gitleaks
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+        run: |
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o /tmp/gitleaks.tgz
+          tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
+          sudo install /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+      # Scoped to HEAD deliberately. `fetch-depth: 0` brings down every remote ref and a bare
+      # `gitleaks git .` walks all of them, so one finding on anybody's unmerged branch fails
+      # the run for a ref that does not contain it. On a pull request HEAD is the merge commit,
+      # so a branch is still scanned against its own history plus main's.
+      - name: Gitleaks (full history of THIS ref, redacted output)
+        run: gitleaks git . --log-opts=HEAD --redact --no-banner
