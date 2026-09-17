@@ -12,7 +12,7 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# The steps live in 34Five/ci-actions and are shared by every repository, so the toolchain
+# The steps live in 34Five/.github and are shared by every repository, so the toolchain
 # pin and the scan policy cannot drift apart per repository. What stays here is what a
 # composite action cannot set: the runner, the timeout, the concurrency group — and the
 # JOB NAMES, which are the strings a branch ruleset matches on. Keep them spelled exactly
@@ -50,7 +50,7 @@ jobs:
             echo "present=false" >> "$GITHUB_OUTPUT"
             echo "::warning title=CI is not yet proving anything::No package.json in this repository, so typecheck and test were skipped. This guard exists only until the project is scaffolded — delete it, and the if: condition below, in the commit that adds package.json."
           fi
-      - uses: 34Five/ci-actions/actions/bun-check@v1
+      - uses: 34Five/.github/actions/bun-check@v1
         if: steps.scaffold.outputs.present == 'true'
 
   secrets:
@@ -60,4 +60,4 @@ jobs:
     # Never conditional and never guarded: it costs seconds, and unlike the job above it
     # is fully meaningful from the first commit. Secrets belong in `wrangler secret put`.
     steps:
-      - uses: 34Five/ci-actions/actions/secret-scan@v1
+      - uses: 34Five/.github/actions/secret-scan@v1
