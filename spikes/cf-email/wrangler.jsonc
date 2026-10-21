@@ -1,0 +1,31 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "aura-spike-email",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-10-21",
+	"account_id": "3973e13ac59e8e3799ee812ad57ad3cb",
+	"workers_dev": true,
+	"preview_urls": false,
+	"observability": {
+		"enabled": true,
+		"head_sampling_rate": 1,
+	},
+	"send_email": [
+		{
+			"name": "EMAIL",
+			"allowed_sender_addresses": ["spike-test@34five.studio"],
+		},
+	],
+	"kv_namespaces": [
+		{
+			"binding": "SENT",
+			// Create a dedicated namespace only after deployment approval.
+			"id": "83b0043e95c6434bb38ae350b220bddc",
+		},
+	],
+	"vars": {
+		"SEND_ENABLED": "false",
+		// Comma-separated Gmail, Outlook, and controlled bounce test addresses.
+		"SPIKE_ALLOWED_RECIPIENTS": "",
+	},
+}

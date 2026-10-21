@@ -1,0 +1,23 @@
+{
+  "name": "aura-spike-bounce-check",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-10-21",
+  "account_id": "3973e13ac59e8e3799ee812ad57ad3cb",
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "send_email": [
+    {
+      "name": "EMAIL",
+      "allowed_sender_addresses": [
+        "spike-test@34five.studio"
+      ]
+    }
+  ],
+  "vars": {
+    "MANUAL_TEST_RECIPIENT": ""
+  }
+}

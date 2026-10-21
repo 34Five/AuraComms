@@ -1,0 +1,4 @@
+# Copy to .dev.vars for local tests. Never commit the real token.
+SPIKE_SEND_TOKEN=replace-with-a-random-token-at-least-32-characters-long
+SEND_ENABLED=false
+SPIKE_ALLOWED_RECIPIENTS=
