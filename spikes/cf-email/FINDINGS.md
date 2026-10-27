@@ -2,6 +2,19 @@
 
 Validation date: 21 October 2026. Status: partial validation complete.
 
+## Demo update: 27 October 2026
+
+- Deployed version `7ec4ae7e-e472-451e-986b-75e49ab3ddf7` to `aura-spike-email` with automatic demo replies enabled.
+- Removed the test-recipient allowlist. The manual send endpoint still requires its existing secret token.
+- Native replies preserve threading. Messages mentioning `attachment` or `attachments`, or containing a file, receive a 75-byte `aura-demo.txt` sample.
+- Uploaded files are counted but are not echoed back. Automated mail and long threads do not trigger replies.
+- All 64 automated tests, TypeScript checks, and the deployment dry run passed.
+- Five local runtime checks verified MIME threading, exact attachment bytes, duplicate handling, automated mail handling, and upload acknowledgement.
+- Production deployment status confirms the new version serves all traffic. The live manual send endpoint returns 401 without credentials.
+- These checks sent no external email. Gmail and Outlook inbox delivery for the new automatic reply flow still need live testing.
+
+The original spike evidence below remains unchanged.
+
 ## Confirmed live
 
 - Inbound Gmail delivery reached `aura-spike-email`. The Worker parsed an attachment and recorded its decoded size.

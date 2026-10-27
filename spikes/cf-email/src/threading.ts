@@ -26,6 +26,28 @@ export async function sentKey(id: string): Promise<string> {
   return "sent:" + Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, "0")).join("");
 }
 
+export async function recordSent(
+  store: KVNamespace,
+  messageId: string,
+  details: Pick<SentMessage, "request_id" | "recipient" | "subject">,
+) {
+  const record: SentMessage = {
+    ...details,
+    message_id_raw: messageId,
+    message_id_normalized: normalizeMessageId(messageId),
+    sent_at: new Date().toISOString(),
+  };
+  let trackingStatus = "stored";
+  try {
+    if (!record.message_id_normalized) throw new Error("Missing Message-ID in send result.");
+    await store.put(await sentKey(messageId), JSON.stringify(record), { expirationTtl: 7 * 24 * 60 * 60 });
+  } catch {
+    // The send already happened. A tracking failure must never trigger another send.
+    trackingStatus = "failed";
+  }
+  return { record, trackingStatus };
+}
+
 export async function checkThreading(
   store: KVNamespace,
   inReplyTo: string | null,

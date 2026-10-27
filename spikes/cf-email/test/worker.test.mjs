@@ -15,7 +15,6 @@ function fixture() {
 	const env = {
 		SPIKE_SEND_TOKEN: TOKEN,
 		SEND_ENABLED: 'true',
-		SPIKE_ALLOWED_RECIPIENTS: 'tester@example.com',
 		EMAIL: {
 			async send(message) {
 				sends.push(message)
@@ -77,20 +76,28 @@ test('missing or weak tokens fail closed', async () => {
 	assert.equal(sends.length, 0)
 })
 
-test('sending requires explicit enablement and an exact recipient allowlist', async () => {
+test('sending still requires explicit enablement for any recipient', async () => {
 	const { env, sends } = fixture()
 	for (const enabled of [undefined, 'false', 'TRUE']) {
 		env.SEND_ENABLED = enabled
 		assert.equal((await worker.fetch(request(), env)).status, 403)
 	}
-	env.SEND_ENABLED = 'true'
-	assert.equal(
-		(await worker.fetch(request({ to: 'other@example.com' }), env)).status,
-		403,
-	)
-	env.SPIKE_ALLOWED_RECIPIENTS = ''
-	assert.equal((await worker.fetch(request(), env)).status, 503)
 	assert.equal(sends.length, 0)
+})
+
+test('authenticated sending accepts recipients without a configured allowlist', async () => {
+	const { env, sends } = fixture()
+	const recipients = [
+		'other@example.com',
+		'person+tag@external.example',
+		'Person@another.example',
+	]
+	for (const to of recipients) {
+		const response = await worker.fetch(request({ to }), env)
+		assert.equal(response.status, 202)
+		assert.equal((await response.json()).send_status, 'accepted')
+	}
+	assert.deepEqual(sends.map(message => message.to), recipients)
 })
 
 test('invalid JSON, fields, recipients, and header injection do not call send', async () => {
@@ -102,6 +109,9 @@ test('invalid JSON, fields, recipients, and header injection do not call send', 
 		{},
 		{ to: ['tester@example.com'] },
 		{ to: 'tester@example.com,other@example.com' },
+		{ to: 'other@example.com\r\nBcc: victim@example.com' },
+		{ to: 'other@example.com;victim@example.com' },
+		{ to: 'Person <other@example.com>' },
 		{ to: 'tester@example.com', subject: 'Hello\r\nBcc: other@example.com' },
 		{
 			to: 'tester@example.com',
@@ -363,6 +373,24 @@ test('inbound parsing logs raw headers and decoded attachment sizes without send
 	assert.equal(inbound.thread_index, 'outlook-index')
 	assert.equal(inbound.in_reply_to_match, true)
 	assert.equal(sends.length, 1)
+})
+
+test('inbound mail accepts an unlisted sender without HTTP credentials or sending enabled', async (t) => {
+	const { env, sends } = fixture()
+	delete env.SPIKE_SEND_TOKEN
+	env.SEND_ENABLED = 'false'
+	const lines = []
+	t.mock.method(console, 'log', value => lines.push(JSON.parse(value)))
+	const raw = rawEmail.replaceAll('sender@example.com', 'outside@unlisted.example')
+	await worker.email({
+		from: 'outside@unlisted.example',
+		to: 'spike-test@34five.studio',
+		rawSize: new TextEncoder().encode(raw).byteLength,
+		raw: new Response(raw).body,
+		headers: new Headers(),
+	}, env)
+	assert.equal(lines.find(line => line.event === 'inbound').envelope_from, 'outside@unlisted.example')
+	assert.equal(sends.length, 0)
 })
 
 test('KV read failure still preserves inbound evidence', async (t) => {

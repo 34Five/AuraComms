@@ -24,8 +24,7 @@
 		},
 	],
 	"vars": {
-		"SEND_ENABLED": "false",
-		// Comma-separated Gmail, Outlook, and controlled bounce test addresses.
-		"SPIKE_ALLOWED_RECIPIENTS": "",
+		"SEND_ENABLED": "true",
+		"AUTO_REPLY_ENABLED": "true",
 	},
 }

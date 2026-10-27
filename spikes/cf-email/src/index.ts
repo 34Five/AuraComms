@@ -1,19 +1,18 @@
 import PostalMime from "postal-mime";
-import { checkThreading, messageIds, normalizeMessageId, sentKey } from "./threading.ts";
-import type { SentMessage } from "./threading.ts";
+import { checkThreading, messageIds, normalizeMessageId, recordSent } from "./threading.ts";
+import { autoReply } from "./auto-reply.ts";
 
 export interface Env {
   EMAIL: SendEmail;
   SENT: KVNamespace;
   SPIKE_SEND_TOKEN?: string;
   SEND_ENABLED?: string;
-  SPIKE_ALLOWED_RECIPIENTS?: string;
+  AUTO_REPLY_ENABLED?: string;
 }
 
 const SENDER = "spike-test@34five.studio";
 const MAX_REQUEST_BYTES = 16 * 1024;
 const MAX_INBOUND_BYTES = 25 * 1024 * 1024;
-const SENT_TTL_SECONDS = 7 * 24 * 60 * 60;
 const encoder = new TextEncoder();
 
 class InputError extends Error {
@@ -124,11 +123,8 @@ function errorCode(error: unknown): string {
 
 async function send(body: Record<string, unknown>, env: Env, requestId: string): Promise<Response> {
   if (env.SEND_ENABLED !== "true") return json({ error: "Sending is disabled." }, 403);
-  const allowed = (env.SPIKE_ALLOWED_RECIPIENTS ?? "").split(",").map(address => address.trim()).filter(Boolean);
-  if (allowed.length === 0) return json({ error: "No test recipients are configured." }, 503);
   const to = headerValue(body.to, "to", 254);
   if (!/^[^\s<>@,;]+@[^\s<>@,;]+$/.test(to)) throw new InputError("Use one plain recipient address.");
-  if (!allowed.includes(to)) return json({ error: "Recipient is not allowed." }, 403);
   const subject = body.subject === undefined ? "AXI-4 Cloudflare email spike" : headerValue(body.subject, "subject");
   const { parent, references } = threadingInput(body, true);
   const headers: Record<string, string> = {};
@@ -157,21 +153,11 @@ async function send(body: Record<string, unknown>, env: Env, requestId: string):
     // Never retry automatically. A failed call can have an uncertain delivery outcome.
     return json({ request_id: requestId, code, send_status: "unknown", retry_safe: false }, 502);
   }
-  const record: SentMessage = {
+  const { record, trackingStatus } = await recordSent(env.SENT, result.messageId, {
     request_id: requestId,
-    message_id_raw: result.messageId,
-    message_id_normalized: normalizeMessageId(result.messageId),
     recipient: to,
     subject,
-    sent_at: new Date().toISOString(),
-  };
-  let trackingStatus = "stored";
-  try {
-    if (!record.message_id_normalized) throw new Error("Missing Message-ID in send result.");
-    await env.SENT.put(await sentKey(result.messageId), JSON.stringify(record), { expirationTtl: SENT_TTL_SECONDS });
-  } catch {
-    trackingStatus = "failed";
-  }
+  });
   const response = {
     ...result,
     request_id: requestId,
@@ -251,6 +237,7 @@ export default {
         })),
         ...threading,
       });
+      await autoReply(message, env, parsed, receiptId, log);
     } catch (error) {
       log("inbound_error", { receipt_id: receiptId, raw_size_bytes: message.rawSize });
       throw error;
