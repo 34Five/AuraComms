@@ -7,6 +7,20 @@ const DEMO_ATTACHMENT = "34Five Aura email demo attachment.\nThis is a sample fi
 const MAX_DEMO_REFERENCES = 20;
 type Logger = (event: string, fields: Record<string, unknown>) => void;
 
+function replyError(error: unknown, secret?: string) {
+  const clean = (value: string) => {
+    const redacted = secret ? value.split(secret).join("[redacted]") : value;
+    return redacted.replace(/[\x00-\x1f\x7f]/g, " ").slice(0, 512);
+  };
+  const code = error && typeof error === "object" && "code" in error
+    && (typeof error.code === "string" || typeof error.code === "number") ? String(error.code) : "E_REPLY_FAILED";
+  return {
+    code: clean(code),
+    error_name: clean(error instanceof Error ? error.name : "UnknownError"),
+    error_message: clean(error instanceof Error ? error.message : typeof error === "string" ? error : "Reply failed without an error message."),
+  };
+}
+
 export async function autoReply(
   message: ForwardableEmailMessage,
   env: Env,
@@ -42,13 +56,26 @@ export async function autoReply(
 
   // KV limits repeat replies after redelivery. It is eventually consistent, not an atomic lock.
   const attemptKey = `demo-reply:${await sentKey(normalizeMessageId(originalId))}`;
+  const attempt = {
+    attempted_at: new Date().toISOString(),
+    receipt_id: receiptId,
+    incoming_message_id: originalId,
+    recipient: message.from,
+  };
   try {
     if (await env.SENT.get(attemptKey)) return skip("duplicate_message");
     // Claim before sending. Keep the claim if delivery fails or its outcome is unknown.
-    await env.SENT.put(attemptKey, JSON.stringify({ attempted_at: new Date().toISOString() }), { expirationTtl: 7 * 24 * 60 * 60 });
+    await env.SENT.put(attemptKey, JSON.stringify({ ...attempt, send_status: "attempted" }), { expirationTtl: 7 * 24 * 60 * 60 });
   } catch {
     return skip("deduplication_unavailable");
   }
+  const saveOutcome = async (outcome: Record<string, unknown>) => {
+    try {
+      await env.SENT.put(attemptKey, JSON.stringify({ ...attempt, ...outcome }), { expirationTtl: 7 * 24 * 60 * 60 });
+    } catch {
+      log("auto_reply_outcome_storage_error", { receipt_id: receiptId, retry_safe: false });
+    }
+  };
 
   const includeAttachment = parsed.attachments.length > 0
     || /\battachments?\b/i.test(`${subject}\n${parsed.text ?? ""}\n${(parsed.html ?? "").replace(/<[^>]*>/g, " ")}`);
@@ -81,6 +108,7 @@ export async function autoReply(
     const { trackingStatus } = await recordSent(env.SENT, result.messageId, {
       request_id: receiptId, recipient: message.from, subject: replySubject,
     });
+    await saveOutcome({ send_status: "accepted", message_id_raw: result.messageId, tracking_status: trackingStatus });
     log("auto_reply", {
       receipt_id: receiptId,
       message_id_raw: result.messageId,
@@ -93,11 +121,13 @@ export async function autoReply(
     });
   } catch (error) {
     // Do not throw or retry a send with an uncertain outcome after accepting inbound mail.
-    log("auto_reply_error", {
+    const failure = {
       receipt_id: receiptId,
-      code: error && typeof error === "object" && "code" in error ? error.code : "E_REPLY_FAILED",
+      ...replyError(error, env.SPIKE_SEND_TOKEN),
       send_status: "unknown",
       retry_safe: false,
-    });
+    };
+    log("auto_reply_error", failure);
+    await saveOutcome(failure);
   }
 }

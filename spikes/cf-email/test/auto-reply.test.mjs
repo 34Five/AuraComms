@@ -198,13 +198,64 @@ test('deduplication read or claim failure skips sending', async t => {
   assert.equal(logs.filter(log => log.reason === 'deduplication_unavailable').length, 2)
 })
 
-test('native reply failure is logged without throwing or retrying', async t => {
-  const { env, replies, message, logs } = fixture(t)
+test('native reply failure preserves diagnostics without throwing or retrying', async t => {
+  const { env, replies, message, logs, records } = fixture(t)
   const options = { reply() { throw Object.assign(new Error('DMARC failure'), { code: 'E_TEST_DMARC' }) } }
   await worker.email(message(options), env)
   await worker.email(message(options), env)
   assert.equal(replies.length, 1)
   assert.equal(logs.find(log => log.event === 'auto_reply_error').code, 'E_TEST_DMARC')
+  const saved = JSON.parse([...records.entries()].find(([key]) => key.startsWith('demo-reply:'))[1])
+  assert.equal(saved.send_status, 'unknown')
+  assert.equal(saved.error_message, 'DMARC failure')
+  assert.equal(saved.incoming_message_id, '<demo-inbound@external.example>')
+  assert.equal(saved.recipient, 'tester@external.example')
+})
+
+test('accepted replies store their outcome even when separate sent tracking is unavailable', async t => {
+  const { env, message, records } = fixture(t)
+  const put = env.SENT.put
+  env.SENT.put = async (key, ...args) => {
+    if (key.startsWith('sent:')) throw new Error('Sent tracking unavailable')
+    return put(key, ...args)
+  }
+  await worker.email(message(), env)
+  const saved = JSON.parse([...records.entries()].find(([key]) => key.startsWith('demo-reply:'))[1])
+  assert.equal(saved.send_status, 'accepted')
+  assert.equal(saved.message_id_raw, '<demo-outbound@34five.studio>')
+  assert.equal(saved.tracking_status, 'failed')
+})
+
+test('error diagnostics are bounded, single-line, and redact the send secret', async t => {
+  const { env, message, logs, records } = fixture(t)
+  env.SPIKE_SEND_TOKEN = 'sensitive-demo-send-secret-with-at-least-32-characters'
+  await worker.email(message({ reply() { throw new Error(`${env.SPIKE_SEND_TOKEN}\r\n${'x'.repeat(700)}`) } }), env)
+  const error = logs.find(log => log.event === 'auto_reply_error')
+  assert.match(error.error_message, /\[redacted\]/)
+  assert.ok(error.error_message.length <= 512)
+  assert.doesNotMatch(error.error_message, /[\r\n]/)
+  assert.ok(!JSON.stringify([...records.values(), logs]).includes(env.SPIKE_SEND_TOKEN))
+})
+
+test('a failed outcome write never loses the original reply error or triggers a retry', async t => {
+  const { env, message, replies, logs } = fixture(t)
+  const put = env.SENT.put
+  let writes = 0
+  env.SENT.put = async (...args) => {
+    if (++writes > 1) throw new Error('Outcome storage unavailable')
+    return put(...args)
+  }
+  await worker.email(message({ reply() { throw new Error('Original reply failure') } }), env)
+  await worker.email(message(), env)
+  assert.equal(replies.length, 1)
+  assert.equal(logs.find(log => log.event === 'auto_reply_error').error_message, 'Original reply failure')
+  assert.ok(logs.some(log => log.event === 'auto_reply_outcome_storage_error'))
+})
+
+test('string errors are recorded safely', async t => {
+  const { env, message, logs } = fixture(t)
+  await worker.email(message({ reply() { throw 'Plain reply failure' } }), env)
+  assert.equal(logs.find(log => log.event === 'auto_reply_error').error_message, 'Plain reply failure')
 })
 
 test('tracking failure after native reply acceptance never retries', async t => {

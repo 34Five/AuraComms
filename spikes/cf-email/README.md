@@ -59,6 +59,8 @@ Messages with missing or ambiguous Message-IDs are logged without a reply. Threa
 Seven-day KV attempt records limit duplicate replies. KV is eventually consistent, so these records are not a strict concurrent-delivery lock.
 If the claim store fails, the Worker logs the message without sending a reply. Failed or uncertain reply attempts are logged and never retried automatically.
 Reply errors do not reject the incoming email. Inspect `auto_reply`, `auto_reply_skipped`, and `auto_reply_error` logs during testing.
+New KV attempt records retain the receipt ID, original Message-ID, recipient, and accepted reply ID or bounded error details for seven days.
+Older attempt records contain only a timestamp. Their original errors cannot be recovered from KV.
 
 ## HTTP requests
 
