@@ -1,0 +1,11 @@
+{
+  "source": "User-supplied D1 sqlite_schema export, Pasted text.txt, 2026-10-22",
+  "source_library_file_id": "libfile_42b166091e188191af8ab32f422376d9",
+  "tables": [
+    "auras",
+    "studio_members"
+  ],
+  "sha256": "fe0dbaf8414f6be041d497dbe08728434195a5910712a0dc63f147faa48a32e8",
+  "upstream_migration_version": null,
+  "note": "Exact CREATE TABLE definitions only. No rows or customer data. Current remote schema not asserted."
+}

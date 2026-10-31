@@ -1,6 +1,38 @@
+-- E07 / AXI-7 consolidated draft, revised for PR #3 review.
+-- Apply once to an Aura-layer D1 schema with auras and studio_members (see docs/email-model.md).
+-- Not an upgrade for an already-applied earlier draft: preserve/export any such data
+-- and prepare a separate reviewed upgrade migration. No destructive rebuild is included.
+-- Domains are the AXI-12 prerequisite; lifecycle/provisioning services are separate.
 
 -- Enables a composite FK that rejects an Aura from another organization.
 CREATE UNIQUE INDEX idx_e07_auras_org_id ON auras(org_id, id);
+
+CREATE TABLE email_domains (
+  id TEXT PRIMARY KEY NOT NULL,
+  org_id TEXT NOT NULL CHECK (org_id <> '' AND org_id <> 'org'),
+  domain TEXT NOT NULL,
+  domain_key TEXT NOT NULL UNIQUE CHECK (domain_key = lower(domain_key) AND domain_key <> '' AND domain_key NOT LIKE '%@%'),
+  kind TEXT NOT NULL CHECK (kind IN ('default_subdomain','custom')),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','verifying','active','failed','disabled')),
+  dns_records_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(dns_records_json) AND json_type(dns_records_json) = 'array'),
+  cloudflare_zone_id TEXT,
+  cloudflare_domain_id TEXT,
+  failure_reason TEXT,
+  verified_at TEXT,
+  activated_at TEXT,
+  disabled_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  UNIQUE (org_id, id),
+  CHECK (status <> 'active' OR (verified_at IS NOT NULL AND activated_at IS NOT NULL)),
+  CHECK (status <> 'failed' OR failure_reason IS NOT NULL),
+  CHECK (status <> 'disabled' OR disabled_at IS NOT NULL)
+);
+CREATE UNIQUE INDEX idx_email_domains_default ON email_domains(org_id) WHERE kind = 'default_subdomain';
+CREATE INDEX idx_email_domains_status ON email_domains(org_id, status);
+CREATE TRIGGER email_domains_identity_immutable BEFORE UPDATE OF id, org_id, domain_key ON email_domains
+WHEN NEW.id IS NOT OLD.id OR NEW.org_id IS NOT OLD.org_id OR NEW.domain_key IS NOT OLD.domain_key
+BEGIN SELECT RAISE(ABORT, 'Domain identity is immutable; register a new domain'); END;
 
 -- Future guardrails can be represented in rules_json without adding new columns.
 -- Empty rules mean no additional configured rules; no allowlist is seeded or enforced.
@@ -35,24 +67,76 @@ CREATE TABLE email_aura_reviewers (
 CREATE INDEX idx_email_reviewers_member ON email_aura_reviewers(org_id, member_id, revoked_at, aura_id);
 CREATE INDEX idx_email_reviewers_active ON email_aura_reviewers(org_id, aura_id, member_id) WHERE revoked_at IS NULL;
 
+-- Stable address identity: Aura ownership lives in the assignment history below.
 CREATE TABLE email_addresses (
   id TEXT PRIMARY KEY NOT NULL,
   org_id TEXT NOT NULL CHECK (org_id <> '' AND org_id <> 'org'),
-  aura_id TEXT NOT NULL,
+  domain_id TEXT NOT NULL,
+  local_part TEXT NOT NULL CHECK (local_part <> '' AND local_part = lower(local_part) AND local_part NOT LIKE '%@%'),
   address TEXT NOT NULL,
-  address_key TEXT NOT NULL UNIQUE,
-  domain TEXT NOT NULL,
+  address_key TEXT NOT NULL UNIQUE CHECK (address_key = lower(address_key) AND address = address_key),
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','disabled','released')),
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   disabled_at TEXT,
   released_at TEXT,
-  UNIQUE (org_id, aura_id, id),
-  FOREIGN KEY (org_id, aura_id) REFERENCES auras(org_id, id),
+  UNIQUE (org_id, id),
+  UNIQUE (domain_id, local_part),
+  FOREIGN KEY (org_id, domain_id) REFERENCES email_domains(org_id, id),
   CHECK ((status = 'active' AND disabled_at IS NULL AND released_at IS NULL)
       OR (status = 'disabled' AND disabled_at IS NOT NULL AND released_at IS NULL)
       OR (status = 'released' AND disabled_at IS NOT NULL AND released_at IS NOT NULL))
 );
-CREATE INDEX idx_email_addresses_aura ON email_addresses(org_id, aura_id, status);
+CREATE INDEX idx_email_addresses_domain ON email_addresses(org_id, domain_id, status);
+CREATE TRIGGER email_addresses_domain_match BEFORE INSERT ON email_addresses
+WHEN EXISTS (SELECT 1 FROM email_domains d WHERE d.org_id = NEW.org_id AND d.id = NEW.domain_id
+  AND NEW.address_key <> NEW.local_part || '@' || d.domain_key)
+BEGIN SELECT RAISE(ABORT, 'Address must match its registered domain'); END;
+CREATE TRIGGER email_addresses_identity_immutable BEFORE UPDATE OF id, org_id, domain_id, local_part, address, address_key ON email_addresses
+WHEN NEW.id IS NOT OLD.id OR NEW.org_id IS NOT OLD.org_id OR NEW.domain_id IS NOT OLD.domain_id
+  OR NEW.local_part IS NOT OLD.local_part OR NEW.address IS NOT OLD.address OR NEW.address_key IS NOT OLD.address_key
+BEGIN SELECT RAISE(ABORT, 'Address identity is immutable; reserve another address'); END;
+
+-- Assignment intervals are [assigned_at, ended_at); NULL end means the current owner.
+-- Use UTC RFC3339 milliseconds consistently so temporal comparisons are lexical.
+CREATE TABLE email_address_assignments (
+  id TEXT PRIMARY KEY NOT NULL,
+  org_id TEXT NOT NULL,
+  address_id TEXT NOT NULL,
+  aura_id TEXT NOT NULL,
+  assigned_at TEXT NOT NULL,
+  ended_at TEXT,
+  assigned_by_member_id TEXT,
+  ended_by_member_id TEXT,
+  reason TEXT,
+  UNIQUE (org_id, aura_id, address_id, id),
+  FOREIGN KEY (org_id, address_id) REFERENCES email_addresses(org_id, id),
+  FOREIGN KEY (org_id, aura_id) REFERENCES auras(org_id, id),
+  FOREIGN KEY (org_id, assigned_by_member_id) REFERENCES studio_members(org_id, member_id),
+  FOREIGN KEY (org_id, ended_by_member_id) REFERENCES studio_members(org_id, member_id),
+  CHECK (length(assigned_at) = 24 AND assigned_at GLOB '????-??-??T??:??:??.???Z'),
+  CHECK (ended_at IS NULL OR (length(ended_at) = 24 AND ended_at GLOB '????-??-??T??:??:??.???Z' AND ended_at > assigned_at))
+);
+CREATE UNIQUE INDEX idx_email_assignments_current ON email_address_assignments(org_id, address_id) WHERE ended_at IS NULL;
+CREATE INDEX idx_email_assignments_history ON email_address_assignments(org_id, address_id, assigned_at);
+CREATE INDEX idx_email_assignments_aura ON email_address_assignments(org_id, aura_id, ended_at);
+CREATE TRIGGER email_assignments_overlap_insert BEFORE INSERT ON email_address_assignments
+WHEN EXISTS (SELECT 1 FROM email_address_assignments a WHERE a.org_id = NEW.org_id AND a.address_id = NEW.address_id
+  AND NEW.assigned_at < COALESCE(a.ended_at, '9999-12-31T23:59:59.999Z')
+  AND a.assigned_at < COALESCE(NEW.ended_at, '9999-12-31T23:59:59.999Z'))
+BEGIN SELECT RAISE(ABORT, 'Address assignment intervals must not overlap'); END;
+CREATE TRIGGER email_assignments_overlap_update BEFORE UPDATE ON email_address_assignments
+WHEN EXISTS (SELECT 1 FROM email_address_assignments a WHERE a.id <> OLD.id AND a.org_id = NEW.org_id AND a.address_id = NEW.address_id
+  AND NEW.assigned_at < COALESCE(a.ended_at, '9999-12-31T23:59:59.999Z')
+  AND a.assigned_at < COALESCE(NEW.ended_at, '9999-12-31T23:59:59.999Z'))
+BEGIN SELECT RAISE(ABORT, 'Address assignment intervals must not overlap'); END;
+CREATE TRIGGER email_assignments_no_released_address BEFORE INSERT ON email_address_assignments
+WHEN EXISTS (SELECT 1 FROM email_addresses WHERE org_id = NEW.org_id AND id = NEW.address_id AND status = 'released')
+BEGIN SELECT RAISE(ABORT, 'Released addresses cannot be assigned under the current no-reuse policy'); END;
+CREATE TRIGGER email_assignments_identity_immutable BEFORE UPDATE ON email_address_assignments
+WHEN NEW.id IS NOT OLD.id OR NEW.org_id IS NOT OLD.org_id OR NEW.aura_id IS NOT OLD.aura_id
+  OR NEW.address_id IS NOT OLD.address_id OR NEW.assigned_at IS NOT OLD.assigned_at
+  OR (OLD.ended_at IS NOT NULL AND NEW.ended_at IS NOT OLD.ended_at)
+BEGIN SELECT RAISE(ABORT, 'Close an assignment and insert a new row; do not rewrite its history'); END;
 
 CREATE TABLE email_contacts (
   id TEXT PRIMARY KEY NOT NULL,
@@ -106,6 +190,7 @@ CREATE TABLE email_messages (
   aura_id TEXT NOT NULL,
   thread_id TEXT NOT NULL,
   email_address_id TEXT NOT NULL,
+  address_assignment_id TEXT NOT NULL,
   direction TEXT NOT NULL CHECK (direction IN ('in','out')),
   status TEXT NOT NULL,
   rfc_message_id TEXT, -- Canonical parsed RFC header ID; NULL when missing/unavailable.
@@ -138,7 +223,8 @@ CREATE TABLE email_messages (
   UNIQUE (org_id, aura_id, id),
   UNIQUE (org_id, aura_id, thread_id, id),
   FOREIGN KEY (org_id, aura_id, thread_id) REFERENCES email_threads(org_id, aura_id, id),
-  FOREIGN KEY (org_id, aura_id, email_address_id) REFERENCES email_addresses(org_id, aura_id, id),
+  FOREIGN KEY (org_id, aura_id, email_address_id, address_assignment_id)
+    REFERENCES email_address_assignments(org_id, aura_id, address_id, id),
   FOREIGN KEY (org_id, sender_contact_id) REFERENCES email_contacts(org_id, id),
   CHECK ((direction = 'in' AND status = 'received' AND received_at IS NOT NULL AND send_idempotency_key IS NULL)
       OR (direction = 'out' AND status IN ('draft','queued','sending','sent','failed','cancelled') AND received_at IS NULL AND send_idempotency_key IS NOT NULL)),
@@ -154,10 +240,24 @@ CREATE INDEX idx_email_messages_rfc ON email_messages(org_id, aura_id, rfc_messa
 CREATE INDEX idx_email_messages_provider ON email_messages(provider, provider_message_id) WHERE provider_message_id IS NOT NULL;
 CREATE INDEX idx_email_messages_thread ON email_messages(org_id, aura_id, thread_id, activity_at, id);
 CREATE INDEX idx_email_messages_inbox ON email_messages(org_id, aura_id, direction, status, activity_at DESC, id DESC);
-CREATE TRIGGER email_messages_identity_immutable BEFORE UPDATE OF org_id, aura_id, thread_id, email_address_id, direction ON email_messages
+CREATE TRIGGER email_messages_identity_immutable BEFORE UPDATE OF org_id, aura_id, thread_id, email_address_id, address_assignment_id, direction ON email_messages
 WHEN NEW.org_id IS NOT OLD.org_id OR NEW.aura_id IS NOT OLD.aura_id OR NEW.thread_id IS NOT OLD.thread_id
-  OR NEW.email_address_id IS NOT OLD.email_address_id OR NEW.direction IS NOT OLD.direction
+  OR NEW.email_address_id IS NOT OLD.email_address_id OR NEW.address_assignment_id IS NOT OLD.address_assignment_id OR NEW.direction IS NOT OLD.direction
 BEGIN SELECT RAISE(ABORT, 'Message scope and direction are immutable; use an explicit reconciliation migration'); END;
+
+CREATE INDEX idx_email_messages_assignment ON email_messages(org_id, address_assignment_id, activity_at);
+CREATE TRIGGER email_messages_assignment_time_insert BEFORE INSERT ON email_messages
+WHEN EXISTS (SELECT 1 FROM email_address_assignments a WHERE a.id = NEW.address_assignment_id AND a.org_id = NEW.org_id
+  AND (NEW.activity_at < a.assigned_at OR (a.ended_at IS NOT NULL AND NEW.activity_at >= a.ended_at)))
+BEGIN SELECT RAISE(ABORT, 'Message activity is outside its address assignment interval'); END;
+CREATE TRIGGER email_messages_assignment_time_update BEFORE UPDATE OF activity_at ON email_messages
+WHEN EXISTS (SELECT 1 FROM email_address_assignments a WHERE a.id = NEW.address_assignment_id AND a.org_id = NEW.org_id
+  AND (NEW.activity_at < a.assigned_at OR (a.ended_at IS NOT NULL AND NEW.activity_at >= a.ended_at)))
+BEGIN SELECT RAISE(ABORT, 'Message activity is outside its address assignment interval'); END;
+CREATE TRIGGER email_assignments_preserve_message_history BEFORE UPDATE OF ended_at ON email_address_assignments
+WHEN NEW.ended_at IS NOT NULL AND EXISTS (
+  SELECT 1 FROM email_messages m WHERE m.org_id = OLD.org_id AND m.address_assignment_id = OLD.id AND m.activity_at >= NEW.ended_at)
+BEGIN SELECT RAISE(ABORT, 'Assignment end would exclude existing message history'); END;
 
 CREATE TABLE email_message_recipients (
   id TEXT PRIMARY KEY NOT NULL,
@@ -258,3 +358,4 @@ CREATE TABLE email_events (
 
 CREATE INDEX idx_email_events_message ON email_events(org_id, aura_id, message_id, occurred_at, id);
 CREATE INDEX idx_email_events_analytics ON email_events(org_id, event_type, occurred_at, id);
+
