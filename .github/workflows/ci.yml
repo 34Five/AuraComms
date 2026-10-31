@@ -2,9 +2,9 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, spikes/cf-email]
   push:
-    branches: [main]
+    branches: [main, spikes/cf-email]
 
 # A superseded run has nothing left to prove. Keyed on the ref, so main and each
 # branch queue independently and a rapid second push cancels only its own predecessor.
@@ -61,3 +61,13 @@ jobs:
     # is fully meaningful from the first commit. Secrets belong in `wrangler secret put`.
     steps:
       - uses: 34Five/ci-actions/actions/secret-scan@v1
+
+
+  email_schema:
+    name: Email schema (migration + lifecycle)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Check exported parent schema, migration, seed and address history
+        run: python3 -m unittest discover -s tests/email -v
