@@ -38,7 +38,17 @@ Cloudflare Email Routing sends only the two new test aliases to `aura-inbox-test
 - `support-test@34five.studio` → existing `aura_demo_001` (Customer Support Aura).
 - `sales-test@34five.studio` → existing `aura_demo_002` (Sales Aura).
 
-The existing `spike-test` and `anthony` routes and catch-all remain unchanged. The new Worker has no send-email binding and sends no replies.
+The existing `spike-test` and `anthony` routes and catch-all remain unchanged.
+
+### Default test replies
+
+`AUTO_REPLY_ENABLED=true` enables a fixed demo response for both real test addresses. The reply uses the receiving Aura's name and address. It preserves the conversation subject and uses Cloudflare's native reply API for sender validation and threading. Mention `attachment` or include an attachment to receive `aura-demo.txt`. Uploaded files are not echoed back.
+
+Outgoing replies, recipients, and sample attachments are saved in the same Aura conversation. A reply is marked `sent` only after provider acceptance. Recipient delivery remains `accepted`, not `delivered`. The existing seeded messages are not answered retroactively.
+
+The handler skips automated mail, mailing lists, bounces, known test-address senders, invalid Message-IDs, and threads with 20 references. It ignores incoming Reply-To redirection. A unique D1 send key claims each sender/Message-ID pair within the Aura before a provider call. The active address assignment is checked again before dispatch. Duplicate deliveries cannot create a second reply claim.
+
+Provider timeouts leave the claimed reply in `sending` with an `unknown` event. They do not trigger retries. A tracking failure after provider acceptance also keeps the claim. Reconciliation is manual in this test version. A crash after incoming persistence but before the reply claim can leave mail without a reply. It does not resend automatically. Set `AUTO_REPLY_ENABLED=false` and deploy to disable replies.
 
 The handler resolves the active domain, address, and assignment from the envelope recipient. It matches RFC reply headers only within that organization and Aura. Conflicting or unknown parents start a new thread. A SHA-256 fingerprint of organization, envelope sender/recipient, and exact MIME bytes deduplicates identical redeliveries. Header Message-ID alone does not deduplicate mail. Providers can change MIME bytes between deliveries, so this does not guarantee deduplication of modified redeliveries.
 
@@ -68,10 +78,11 @@ To verify externally, send a test email to each alias. Confirm the message appea
 
 ## Verification on November 2, 2026
 
-- 10 inbox integration tests passed against SQLite with the real schema, foreign keys, and MIME parser.
+- 25 inbox/reply integration tests passed against SQLite with the real schema, foreign keys, and MIME parser.
 - The existing 51 schema/lifecycle tests and 68 spike tests passed.
 - TypeScript, Vite production build, and Wrangler deployment checks passed.
 - The local Cloudflare runtime processed a synthetic MIME email twice and stored one Sales message. The Support inbox did not return it.
+- Native default replies passed in the local Cloudflare emulator for both real test addresses. Each conversation stored one incoming message and one sent reply with a sample attachment. Repeated deliveries did not send another reply.
 - Live API checks returned populated seeded messages for each Aura and `404` for cross-Aura thread lookups.
 - Both real receiving addresses are active in D1 and have enabled Cloudflare rules. The spike-test, anthony, and catch-all rules retained their prior IDs and actions.
 - Live browser checks covered both inboxes and conversation loading. No external SMTP test message was sent during setup.

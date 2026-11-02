@@ -1,6 +1,7 @@
 import PostalMime from 'postal-mime';
 import { HttpError, type Env } from './types.ts';
 import { messageIds, readBounded } from './utils.ts';
+import { autoReply } from './auto-reply.ts';
 
 const encoder = new TextEncoder();
 const MAX_BYTES = 25 * 1024 * 1024;
@@ -123,6 +124,11 @@ export async function receive(message: ForwardableEmailMessage, env: Env): Promi
     // The third statement owns this delivery. A concurrent duplicate leaves its private objects unreferenced.
     if (!result[2].meta.changes) await env.MAIL.delete(storedKeys);
     console.log(JSON.stringify({ event: 'inbox_received', aura_id: route.aura_id, message_id: id, thread_id: threadId }));
+    if (result[2].meta.changes) {
+      // Reply failures must never fail an already committed incoming delivery.
+      try { await autoReply(message, env, parsed, { ...route, message_id: id, thread_id: threadId }); }
+      catch { console.error(JSON.stringify({ event: 'inbox_auto_reply_setup_failed', message_id: id })); }
+    }
   } catch (error) {
     // Never remove objects after an ambiguous database response: the transaction may have committed.
     if (!committed) {

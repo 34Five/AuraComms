@@ -4,6 +4,7 @@ export interface Env {
   ASSETS: Fetcher;
   DEMO_ORG_ID: string;
   TEST_MODE: string;
+  AUTO_REPLY_ENABLED?: string;
 }
 
 export class HttpError extends Error {

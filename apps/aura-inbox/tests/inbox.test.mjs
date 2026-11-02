@@ -46,6 +46,18 @@ function email(to='sales@demo.34five.studio',id='new@example.invalid',extra='',b
     setReject(reason){ this.rejected=reason; } };
 }
 
+function enableReplies(x) {
+  x.sql.exec("INSERT INTO auras (id,org_id,name) VALUES ('aura_demo_001','org_demo_001','Customer Support Aura'),('aura_demo_002','org_demo_001','Sales Aura')");
+  x.sql.exec(readFileSync(new URL('../scripts/provision-addresses.sql',import.meta.url),'utf8'));
+  x.env.DEMO_ORG_ID='org_demo_001'; x.env.AUTO_REPLY_ENABLED='true';
+  const replies=[];
+  return { replies, message(to='sales-test@34five.studio',id='reply-test@example.invalid',extra='',body='A new test message.') {
+    const m=email(to,id,extra,body);
+    m.reply=async value=>{ replies.push(value); return {messageId:`<out-${replies.length}@cloudflare.example>`}; };
+    return m;
+  } };
+}
+
 test('the API lists only the configured organization and real inbox rows',async t => {
   const x=setup(t);
   const response=await x.request('/api/auras');
@@ -167,4 +179,107 @@ test('the byte limit still applies when the sender understates rawSize',async t 
   msg.raw=new ReadableStream({start(controller){controller.enqueue(new Uint8Array(26*1024*1024));controller.close();}});
   await receive(msg,x.env);
   assert.match(msg.rejected,/25 MiB/); assert.equal(x.objects.size,0);
+});
+
+for (const [address,auraId] of [['support-test@34five.studio','aura_demo_001'],['sales-test@34five.studio','aura_demo_002']]) {
+  test(`default reply from ${address} is saved in the correct Aura conversation`,async t => {
+    const x=setup(t), demo=enableReplies(x);
+    await receive(demo.message(address),x.env);
+    assert.equal(demo.replies.length,1);
+    const reply=demo.replies[0];
+    assert.equal(reply.from.email,address); assert.equal(reply.replyTo,address);
+    assert.equal(reply.subject,'Re: New inquiry'); assert.match(reply.text,/fixed demo response/);
+    assert.equal(reply.headers['Auto-Submitted'],'auto-replied');
+    const rows=x.sql.prepare("SELECT * FROM email_messages WHERE org_id='org_demo_001' ORDER BY direction").all();
+    assert.equal(rows.length,2); assert.equal(rows[0].thread_id,rows[1].thread_id);
+    const outgoing=rows.find(r=>r.direction==='out');
+    assert.equal(outgoing.aura_id,auraId); assert.equal(outgoing.status,'sent');
+    assert.equal(outgoing.rfc_message_id,'out-1@cloudflare.example');
+    assert.equal(outgoing.in_reply_to,'reply-test@example.invalid');
+    const api=await (await x.request(`/api/auras/${auraId}/threads/${outgoing.thread_id}/messages`)).json();
+    assert.equal(api.messages.length,2); assert.ok(api.messages.some(m=>m.direction==='out'));
+    assert.deepEqual(x.sql.prepare('PRAGMA foreign_key_check').all(),[]);
+  });
+}
+
+test('attachment requests send and store only the fixed sample file',async t => {
+  const x=setup(t), demo=enableReplies(x);
+  await receive(demo.message(undefined,undefined,'','Please send an attachment.'),x.env);
+  const attachment=demo.replies[0].attachments[0];
+  assert.equal(attachment.filename,'aura-demo.txt'); assert.match(atob(attachment.content),/sample file/);
+  const stored=x.sql.prepare("SELECT * FROM email_attachments WHERE message_id LIKE 'reply_%'").get();
+  assert.ok(x.objects.has(stored.r2_key));
+  const response=await x.request(`/api/auras/aura_demo_002/messages/${stored.message_id}/attachments/${stored.id}`);
+  assert.equal(await response.text(),atob(attachment.content));
+});
+
+test('duplicate MIME and changed-MIME redelivery cannot send another reply',async t => {
+  const x=setup(t), demo=enableReplies(x);
+  await receive(demo.message(),x.env); await receive(demo.message(),x.env);
+  await receive(demo.message(undefined,undefined,'','Modified redelivery bytes.'),x.env);
+  assert.equal(demo.replies.length,1);
+  assert.equal(x.sql.prepare("SELECT COUNT(*) AS n FROM email_messages WHERE org_id='org_demo_001' AND direction='out'").get().n,1);
+});
+
+for (const header of ['Auto-Submitted: auto-replied','Auto-Submitted: no\r\nAuto-Submitted: auto-generated','Precedence: bulk','List-Id: demo','X-Aura-Demo: true','X-Auto-Response-Suppress: All']) {
+  test(`automated mail does not trigger a reply: ${header}`,async t => {
+    const x=setup(t), demo=enableReplies(x);
+    await receive(demo.message(undefined,undefined,header+'\r\n'),x.env);
+    assert.equal(demo.replies.length,0);
+    assert.equal(x.sql.prepare("SELECT COUNT(*) AS n FROM email_messages WHERE org_id='org_demo_001' AND direction='in'").get().n,1);
+  });
+}
+
+test('reply-to cannot redirect a reply and follow-ups reuse the same thread',async t => {
+  const x=setup(t), demo=enableReplies(x);
+  await receive(demo.message(undefined,undefined,'Reply-To: attacker@example.invalid\r\n'),x.env);
+  assert.equal(demo.replies[0].to,undefined);
+  const outgoing=x.sql.prepare("SELECT * FROM email_messages WHERE org_id='org_demo_001' AND direction='out'").get();
+  assert.equal(outgoing.envelope_to,'alex@example.invalid');
+  await receive(demo.message(undefined,'followup@example.invalid','In-Reply-To: <out-1@cloudflare.example>\r\nReferences: <reply-test@example.invalid> <out-1@cloudflare.example>\r\n'),x.env);
+  assert.equal(demo.replies.length,2);
+  const count=x.sql.prepare('SELECT COUNT(*) AS n FROM email_messages WHERE thread_id=?').get(outgoing.thread_id).n;
+  assert.equal(count,4);
+});
+
+test('uncertain send failures keep incoming mail and an unretried send claim',async t => {
+  const x=setup(t), demo=enableReplies(x); let attempts=0;
+  const m=demo.message(); m.reply=async()=>{ attempts++; throw new Error('Provider timeout'); };
+  await receive(m,x.env);
+  await receive(demo.message(undefined,undefined,'','Different redelivery'),x.env);
+  assert.equal(attempts,1); assert.equal(demo.replies.length,0);
+  const row=x.sql.prepare("SELECT * FROM email_messages WHERE org_id='org_demo_001' AND direction='out'").get();
+  assert.equal(row.status,'sending');
+  const event=x.sql.prepare('SELECT event_type,raw_payload_json FROM email_events WHERE message_id=?').get(row.id);
+  assert.equal(event.event_type,'unknown'); assert.equal(JSON.parse(event.raw_payload_json).retry_safe,false);
+});
+
+test('outcome-storage failures never resend an accepted reply',async t => {
+  const x=setup(t), demo=enableReplies(x); let sent=false;
+  const batch=x.env.DB.batch; x.env.DB.batch=async statements=>{ if(sent) throw new Error('Tracking unavailable'); return batch(statements); };
+  const m=demo.message(); m.reply=async value=>{ sent=true; demo.replies.push(value); return {messageId:'<accepted@example.invalid>'}; };
+  await receive(m,x.env); await receive(demo.message(),x.env);
+  assert.equal(demo.replies.length,1);
+});
+
+test('disabled replies, test-address senders, ambiguous IDs and long threads fail closed',async t => {
+  const x=setup(t), demo=enableReplies(x);
+  x.env.AUTO_REPLY_ENABLED='false'; await receive(demo.message(),x.env); x.env.AUTO_REPLY_ENABLED='true';
+  const self=demo.message(undefined,'self@example.invalid'); self.from='support-test@34five.studio'; await receive(self,x.env);
+  await receive(demo.message(undefined,'ambiguous@example.invalid','Message-ID: <duplicate@example.invalid>\r\n'),x.env);
+  const refs=Array.from({length:20},(_,i)=>`<parent-${i}@example.invalid>`).join(' ');
+  await receive(demo.message(undefined,'long@example.invalid',`References: ${refs}\r\n`),x.env);
+  assert.equal(demo.replies.length,0);
+});
+
+test('an address disabled during reply preparation cancels the claimed reply',async t => {
+  const x=setup(t), demo=enableReplies(x);
+  const put=x.env.MAIL.put;
+  x.env.MAIL.put=async(key,value)=>{
+    await put(key,value);
+    if (key.endsWith('/aura-demo.txt')) x.sql.exec("UPDATE email_addresses SET status='disabled',disabled_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE address_key='sales-test@34five.studio'");
+  };
+  await receive(demo.message(undefined,undefined,'','Please send an attachment'),x.env);
+  assert.equal(demo.replies.length,0);
+  assert.equal(x.sql.prepare("SELECT status FROM email_messages WHERE org_id='org_demo_001' AND direction='out'").get().status,'cancelled');
 });
