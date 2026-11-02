@@ -29,7 +29,9 @@ The Worker expects the existing email schema. For a fresh local database, import
 - `GET /api/auras/:auraId/messages/:messageId/body`: full body for R2-backed messages.
 - `GET /api/auras/:auraId/messages/:messageId/attachments/:attachmentId`: forced-download attachment bytes.
 
-The UI refreshes every five seconds while visible. It preserves older loaded pages. Email HTML becomes text. Scripts, remote images, and interactive email content do not run.
+The UI refreshes every five seconds while visible. It preserves older loaded pages. Quoted `>` history and its reply attribution collapse behind “Show quoted text.” Inline answers between quote blocks stay visible. HTML-only blockquotes and Gmail quote containers also collapse. Expanding a quote preserves its content and stays open across automatic refreshes.
+
+Email HTML becomes text. Scripts, remote images, and interactive email content do not run.
 
 ## Incoming mail
 
@@ -78,7 +80,7 @@ To verify externally, send a test email to each alias. Confirm the message appea
 
 ## Verification on November 2, 2026
 
-- 25 inbox/reply integration tests passed against SQLite with the real schema, foreign keys, and MIME parser.
+- 31 inbox/reply and quote-parser tests passed, including SQLite with the real schema, foreign keys, and MIME parser.
 - The existing 51 schema/lifecycle tests and 68 spike tests passed.
 - TypeScript, Vite production build, and Wrangler deployment checks passed.
 - The local Cloudflare runtime processed a synthetic MIME email twice and stored one Sales message. The Support inbox did not return it.

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import DOMPurify from 'dompurify';
+import { fragmentToText, splitQuotedText } from './quoted-text.ts';
 
 type Aura = { id: string; name: string; thread_count: number; message_count: number;
   addresses: { address: string; status: string; domain_status: string }[] };
@@ -42,10 +43,20 @@ function merge<T extends { id: string }>(older: T[], newer: T[]): T[] {
 function plain(text: string | null, html: string | null): string {
   if (text) return text;
   if (!html) return 'This message has no text content.';
-  const stripped = DOMPurify.sanitize(html, { ALLOWED_TAGS: [], ALLOWED_ATTR: [], FORBID_TAGS: ['style','script','img','video','audio','iframe','object','svg'] });
-  const textarea = document.createElement('textarea');
-  textarea.innerHTML = stripped;
-  return textarea.value.trim() || 'This message has no text content.';
+  const fragment = DOMPurify.sanitize(html, {
+    RETURN_DOM_FRAGMENT: true,
+    ALLOWED_TAGS: ['blockquote','br','p','div','li','ul','ol','table','tbody','tr','td','th','pre','span','b','strong','i','em','a'],
+    ALLOWED_ATTR: ['class'],
+    FORBID_TAGS: ['style','script','img','video','audio','iframe','object','svg'],
+  });
+  return fragmentToText(fragment) || 'This message has no text content.';
+}
+
+function MessageBody({ text }: { text: string }) {
+  const parts = useMemo(() => splitQuotedText(text), [text]);
+  return <div className="message-body">{parts.map((part,index) => part.quoted
+    ? <details className="quoted-history" key={index}><summary><span className="quote-dots" aria-hidden="true">•••</span><span className="quote-show">Show quoted text</span><span className="quote-hide">Hide quoted text</span></summary><div className="quoted-content">{part.text}</div></details>
+    : <div className="reply-text" key={index}>{part.text}</div>)}</div>;
 }
 
 function MessageCard({ message: m, auraId }: { message: Message; auraId: string }) {
@@ -65,7 +76,7 @@ function MessageCard({ message: m, auraId }: { message: Message; auraId: string 
     <div className="recipient-line">To: {m.recipients.filter(r => r.kind === 'to').map(r => r.address).join(', ') || '—'}
       {m.recipients.some(r => r.kind === 'cc') && <span> · Cc: {m.recipients.filter(r => r.kind === 'cc').map(r => r.address).join(', ')}</span>}</div>
     {m.body_storage === 'r2' && !body ? <button className="text-button" onClick={load} disabled={loading}>{loading ? 'Loading message…' : 'Load full message'}</button>
-      : <div className="message-body">{plain(body?.body_text ?? m.body_text,body?.body_html ?? m.body_html)}</div>}
+      : <MessageBody text={plain(body?.body_text ?? m.body_text,body?.body_html ?? m.body_html)}/>}
     {error && <p className="inline-error" role="alert">{error}</p>}
     {m.attachments.length > 0 && <div className="attachments">{m.attachments.map(a => <a key={a.id} href={`/api/auras/${auraId}/messages/${m.id}/attachments/${a.id}`} className="attachment"><Icon name="attachment" size={16}/><span>{a.filename || 'Attachment'}<small>{Math.max(1,Math.round(a.size_bytes/1024))} KB</small></span></a>)}</div>}
     <div className="message-status"><Icon name="check" size={13}/>{m.direction === 'in' ? 'Received' : m.status}</div>
