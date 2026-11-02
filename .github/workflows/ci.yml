@@ -71,3 +71,19 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - name: Check exported parent schema, migration, seed and address history
         run: python3 -m unittest discover -s tests/email -v
+
+  aura_inbox:
+    name: Aura inbox (API + MIME + Vite)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: apps/aura-inbox/package-lock.json
+      - run: npm ci
+        working-directory: apps/aura-inbox
+      - run: npm run check
+        working-directory: apps/aura-inbox

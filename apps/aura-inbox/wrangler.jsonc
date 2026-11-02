@@ -1,0 +1,22 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "aura-inbox-test",
+  "main": "worker/index.ts",
+  "account_id": "3973e13ac59e8e3799ee812ad57ad3cb",
+  "compatibility_date": "2026-10-21",
+  "workers_dev": true,
+  "preview_urls": false,
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api", "/api/*"]
+  },
+  "vars": { "DEMO_ORG_ID": "org_demo_001", "TEST_MODE": "true" },
+  "d1_databases": [{
+    "binding": "DB", "database_name": "development_replica",
+    "database_id": "d24ded08-d1cc-4fd1-9834-4185a3046a21"
+  }],
+  "r2_buckets": [{ "binding": "MAIL", "bucket_name": "aura-inbox-test-mail" }],
+  "observability": { "enabled": true, "head_sampling_rate": 1 }
+}
