@@ -10,3 +10,9 @@ python3 -m unittest discover -s tests/email -v
 python3 scripts/email_schema.py demo --output /tmp/aura-email-demo.sqlite
 ```
 
+AXI-8 tier rules and mocked approval state machine: [docs/email-governance.md](docs/email-governance.md).
+
+```bash
+python3 scripts/email_rules_demo.py
+```
+
