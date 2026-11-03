@@ -29,8 +29,11 @@ Only sent history counts. Pending, approved-but-unsent, failed and rejected draf
 cannot unlock automatic replies. Tier 3 allows Aura-initiated mail before inbound;
 the first reply after inbound needs approval. Subsequent inbound in the same epoch
 does not require another initial approval. History is scoped to tenant/Aura/thread.
-Epoch 0 recognizes pre-engine sent history; after reset, only sent reviews in the
-current epoch count. These interpretation choices remain subject to product review.
+Tier 2 epoch 0 recognizes pre-engine sent history; after reset, only sent reviews in
+the current epoch count. Tier 3 requires a sent human Tier 3 review that explicitly
+observed the first inbound message in the current epoch. Proactive sends and legacy
+timestamp-only history cannot establish that boundary. These interpretation choices
+remain subject to product review.
 
 ## Rules model
 
@@ -45,6 +48,10 @@ Empty rules mean no configured copies/limit. Copies apply to Tier 4, are added t
 recipient rows before hashing and deduplicated within each kind. A policy change
 does not remove existing recipient rows: explicitly edit unwanted recipients and
 reevaluate. Every policy change invalidates existing unsent decisions.
+Configured copies must be bare ASCII dot-atom mailboxes with valid domain labels.
+Display names, brackets, address-list separators, whitespace/control characters,
+quoted local parts, domain literals and internationalized addresses are rejected.
+All copies are validated before any recipient rows are modified.
 
 If configured, daily limits apply to every tier, per Aura per UTC calendar day.
 Count sent messages plus today's approved unsent reservations, once per message.
@@ -101,11 +108,18 @@ Earlier demo schema variants require a drift check before applying the upgrade.
 | Added review field | Meaning |
 | --- | --- |
 | decision_source | `human` (default for old rows) or `automatic` |
-| policy_snapshot_json | Tier, policy version and rules used for this revision |
+| policy_snapshot_json | Tier, policy version, rules and Tier 3 inbound boundary used for this revision |
 
 Automatic decisions have no human approver; human approved/rejected/sent records still
 require one. Automatic rejection is disallowed. Legacy `{}` policy snapshots require
 reevaluation before dispatch, while legacy sent reviews remain untouched.
+Tier 3 snapshots also store `tier_3_inbound_id`: the first observed inbound ID, or
+null before inbound. A first inbound arriving after evaluation invalidates the cached
+review, including an automatic approval waiting for dispatch. Reevaluation supersedes
+it and applies the first-reply gate. Later inbound messages do not change this boundary
+or reset a reviewed thread automatically. Timestamps alone never establish that a
+proactive send was a reviewed reply. This uses the existing JSON field; no SQL upgrade
+beyond `0002` is required. Older Tier 3 snapshots without this marker must be reevaluated.
 
 Each revision stores tier, epoch, source, reason, status, snapshot, content hash,
 timestamps and any human decision actor. Transitions update that revision; superseded
@@ -118,6 +132,9 @@ ordered recipients, and attachment metadata/references. R2 keys must identify im
 objects; actual object-byte verification is outside this mock. Edits invalidate approval,
 create a new revision on reevaluation and set `edited_before_send`. Before dispatch,
 recheck hash, policy, epoch, reviewer authority, limit and active address/domain/assignment.
+Dispatch also rechecks automatic conversation eligibility. Successful mock dispatch
+updates message `activity_at` and `sent_at` atomically to the actual send time, so
+conversation order and the existing assignment-history triggers reflect that send.
 Delivery/bounce events remain separate from sent status.
 
 ## Reset hook and open product choices

@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 import hashlib
 import json
+import re
 import sqlite3
 from uuid import uuid4
 
@@ -17,6 +18,18 @@ class GovernanceError(ValueError):
 
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
+
+
+def bare_address(value):
+    """Conservative ASCII dot-atom mailbox; no display names or address lists."""
+    if not isinstance(value, str) or len(value) > 254 or value.count('@') != 1:
+        return False
+    local, domain = value.split('@')
+    atom = r"[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+"
+    return (len(local) <= 64 and re.fullmatch(atom + r'(?:\.' + atom + r')*', local) is not None
+            and len(domain) <= 253 and all(
+                re.fullmatch(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?', label)
+                is not None for label in domain.split('.')))
 
 
 class RulesEngine:
@@ -71,10 +84,7 @@ class RulesEngine:
             raise GovernanceError('Unsupported guardrail; refusing to ignore it')
         for kind in ('cc', 'bcc'):
             addresses = rules.get(kind, [])
-            if not isinstance(addresses, list) or any(
-                not isinstance(a, str) or a.count('@') != 1 or any(c.isspace() for c in a)
-                or not all(a.split('@')) for a in addresses
-            ):
+            if not isinstance(addresses, list) or any(not bare_address(a) for a in addresses):
                 raise GovernanceError('cc/bcc must be lists of bare email addresses')
         limit = rules.get('daily_limit')
         if limit is not None and (type(limit) is not int or limit < 1):
@@ -123,6 +133,21 @@ class RulesEngine:
                                 (msg['org_id'], msg['aura_id'], msg['id'], now[:10], now[:10])).fetchone()[0]
         return count >= limit
 
+    def first_inbound(self, msg, now):
+        return self.db.execute('''SELECT id FROM email_messages
+            WHERE org_id=? AND aura_id=? AND thread_id=? AND direction='in' AND activity_at<=?
+            ORDER BY activity_at,id LIMIT 1''',
+            (msg['org_id'], msg['aura_id'], msg['thread_id'], now)).fetchone()
+
+    def snapshot(self, msg, policy, now):
+        snapshot = dict(policy)
+        if policy['tier'] == '3':
+            inbound = self.first_inbound(msg, now)
+            # Presence of this inbound at review time is causal evidence, even if
+            # proactive send and inbound receipt have identical timestamps.
+            snapshot['tier_3_inbound_id'] = inbound['id'] if inbound else None
+        return canonical(snapshot)
+
     def reason(self, msg, thread, policy, now):
         if self.limit_reached(msg, policy, now):
             return 'daily_limit'
@@ -132,22 +157,29 @@ class RulesEngine:
         if tier == '4':
             return None
         scope = (msg['org_id'], msg['aura_id'], msg['thread_id'])
-        inbound = self.db.execute('''SELECT MIN(activity_at) FROM email_messages
-            WHERE org_id=? AND aura_id=? AND thread_id=? AND direction='in' AND activity_at<=?''',
-                                  (*scope, now)).fetchone()[0]
-        # Tier 3 only gates a reply after an inbound; Aura-initiated mail is automatic.
-        if tier == '3' and inbound is None:
-            return None
+        if tier == '3':
+            inbound = self.first_inbound(msg, now)
+            if inbound is None:
+                return None
+            # A sent human review must explicitly have observed this inbound.
+            # Proactive/automatic/legacy timestamp-only history cannot unlock it.
+            reviewed_reply = self.db.execute('''SELECT 1 FROM email_messages m
+                JOIN email_reviews r ON r.org_id=m.org_id AND r.aura_id=m.aura_id AND r.message_id=m.id
+                WHERE m.org_id=? AND m.aura_id=? AND m.thread_id=? AND m.id<>?
+                AND m.status='sent' AND m.direction='out' AND m.sent_at<=?
+                AND r.status='sent' AND r.decision_source='human' AND r.tier_applied='3'
+                AND r.thread_review_epoch=? AND json_extract(r.policy_snapshot_json,'$.tier_3_inbound_id')=?
+                LIMIT 1''', (*scope, msg['id'], now, thread['review_epoch'], inbound['id'])).fetchone()
+            return None if reviewed_reply else 'tier_3_first_inbound_reply'
         sent = self.db.execute('''SELECT 1 FROM email_messages m WHERE m.org_id=? AND m.aura_id=?
             AND m.thread_id=? AND m.direction='out' AND m.status='sent' AND m.id<>?
-            AND m.sent_at<=? AND (? IS NULL OR m.sent_at>=?) AND
+            AND m.sent_at<=? AND
             (?=0 OR EXISTS (SELECT 1 FROM email_reviews r WHERE r.message_id=m.id
               AND r.status='sent' AND r.thread_review_epoch=?)) LIMIT 1''',
-                               (*scope, msg['id'], now, inbound if tier == '3' else None,
-                                inbound, thread['review_epoch'], thread['review_epoch'])).fetchone()
+                               (*scope, msg['id'], now, thread['review_epoch'], thread['review_epoch'])).fetchone()
         if sent:
             return None
-        return 'tier_2_first_outbound' if tier == '2' else 'tier_3_first_inbound_reply'
+        return 'tier_2_first_outbound'
 
     def evaluate(self, org, aura, message):
         with self.atomic():
@@ -161,7 +193,7 @@ class RulesEngine:
             digest = self.fingerprint(msg)
             latest = self.db.execute('''SELECT * FROM email_reviews WHERE org_id=? AND aura_id=?
                 AND message_id=? ORDER BY revision DESC LIMIT 1''', (org, aura, message)).fetchone()
-            snapshot = canonical(policy)
+            snapshot = self.snapshot(msg, policy, now)
             if latest and latest['status'] in ('pending', 'approved', 'rejected'):
                 if (latest['thread_review_epoch'] == thread['review_epoch']
                         and latest['reviewed_content_sha256'] == digest
@@ -196,8 +228,8 @@ class RulesEngine:
         policy = self.policy(msg['org_id'], msg['aura_id'])
         if (review['thread_review_epoch'] != self.thread(msg)['review_epoch']
                 or review['reviewed_content_sha256'] != self.fingerprint(msg)
-                or review['policy_snapshot_json'] != canonical(policy)):
-            raise GovernanceError('Stale review: evaluate the current content, policy and epoch again')
+                or review['policy_snapshot_json'] != self.snapshot(msg, policy, self.now())):
+            raise GovernanceError('Stale review: evaluate the current content, policy, conversation and epoch again')
         return policy
 
     def decide(self, org, aura, review_id, member, outcome):
@@ -236,13 +268,15 @@ class RulesEngine:
             now = self.now()
             if self.limit_reached(msg, policy, now):
                 raise GovernanceError('Daily limit reached')
+            if review['decision_source'] == 'automatic' and self.reason(msg, self.thread(msg), policy, now):
+                raise GovernanceError('Conversation now requires human review; evaluate again')
             self.one('''SELECT a.id FROM email_address_assignments a
                 JOIN email_addresses e ON e.org_id=a.org_id AND e.id=a.address_id
                 JOIN email_domains d ON d.org_id=e.org_id AND d.id=e.domain_id
                 WHERE a.org_id=? AND a.aura_id=? AND a.id=? AND a.ended_at IS NULL
                 AND a.assigned_at<=? AND e.status='active' AND d.status='active' ''',
                      (org, aura, msg['address_assignment_id'], now))
-            self.db.execute("UPDATE email_messages SET status='sent',sent_at=? WHERE id=?", (now, msg['id']))
+            self.db.execute("UPDATE email_messages SET status='sent',sent_at=?,activity_at=? WHERE id=?", (now, now, msg['id']))
             self.db.execute("UPDATE email_reviews SET status='sent',sent_at=? WHERE id=?", (now, review_id))
             self.db.execute('''UPDATE email_threads SET tier_state='sent',last_activity_at=MAX(last_activity_at,?),
                 state_version=state_version+1 WHERE org_id=? AND aura_id=? AND id=?''',

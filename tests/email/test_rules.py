@@ -111,6 +111,106 @@ class RulesTests(unittest.TestCase):
         self.assertEqual([tuple(r) for r in rows], [('bcc', 'audit@example.invalid'), ('cc', 'human@example.invalid')])
         self.send(result)
 
+    def start_proactive_tier_3(self):
+        self.policy(3)
+        self.clone('email_threads', 'thread_quote', id='proactive-thread', first_message_id=None)
+        return self.evaluate(self.draft(thread='proactive-thread'))
+
+    def receive_proactive_inbound(self, name='first-inbound'):
+        self.clone('email_messages', 'msg_quote_in', id=name, thread_id='proactive-thread', ingest_key=name,
+                   activity_at=self.engine.now(), received_at=self.engine.now())
+
+    def test_tier_3_inbound_before_dispatch_invalidates_automatic_approval(self):
+        result = self.start_proactive_tier_3()
+        self.assertEqual(result['decision'], 'send now')
+        self.time = datetime(2026, 10, 22, 11, tzinfo=timezone.utc)
+        self.receive_proactive_inbound()
+        with self.assertRaisesRegex(rules.GovernanceError, 'Stale'):
+            self.send(result)
+        self.assertEqual(self.db.execute("SELECT status,sent_at FROM email_messages WHERE id='draft'").fetchone()[:],
+                         ('draft', None))
+        self.assertEqual(self.evaluate(self.draft('first-reply', 'proactive-thread'))['decision'], 'hold for review')
+        refreshed = self.evaluate('draft')
+        self.assertEqual(refreshed['decision'], 'hold for review')
+        self.assertNotEqual(refreshed['review_id'], result['review_id'])
+        self.assertEqual(self.engine.review(ORG, AURA, result['review_id'])['status'], 'superseded')
+        self.approve(refreshed)
+        self.send(refreshed)
+        self.assertEqual(self.evaluate(self.draft('later-reply', 'proactive-thread'))['decision'], 'send now')
+
+    def test_tier_3_reevaluation_after_inbound_does_not_reuse_cached_automatic_review(self):
+        result = self.start_proactive_tier_3()
+        self.receive_proactive_inbound()
+        refreshed = self.evaluate('draft')
+        self.assertEqual(refreshed['status'], 'pending')
+        self.assertNotEqual(refreshed['review_id'], result['review_id'])
+        with self.assertRaises(rules.GovernanceError):
+            self.send(result)
+
+    def test_tier_3_same_timestamp_proactive_send_does_not_unlock_first_reply(self):
+        result = self.start_proactive_tier_3()
+        self.send(result)
+        self.receive_proactive_inbound()
+        # Proactive send, inbound, review and reply all share the same millisecond.
+        sent_at = self.db.execute("SELECT sent_at FROM email_messages WHERE id='draft'").fetchone()[0]
+        self.assertEqual(sent_at, self.engine.now())
+        reply = self.evaluate(self.draft('first-reply', 'proactive-thread'))
+        self.assertEqual(reply['decision'], 'hold for review')
+        self.approve(reply)
+        self.send(reply)
+        self.assertEqual(self.evaluate(self.draft('later-reply', 'proactive-thread'))['decision'], 'send now')
+
+    def test_tier_3_later_inbound_keeps_reviewed_thread_unlocked(self):
+        self.start_proactive_tier_3()
+        self.receive_proactive_inbound()
+        reply = self.evaluate(self.draft('first-reply', 'proactive-thread'))
+        self.approve(reply)
+        self.send(reply)
+        later = self.evaluate(self.draft('later-reply', 'proactive-thread'))
+        self.time = datetime(2026, 10, 22, 11, tzinfo=timezone.utc)
+        self.receive_proactive_inbound('second-inbound')
+        self.assertEqual(self.evaluate('later-reply')['review_id'], later['review_id'])
+        self.send(later)
+
+    def test_send_advances_activity_and_preserves_actual_assignment_history(self):
+        self.policy(4)
+        result = self.evaluate(self.draft('delayed'))
+        self.time = datetime(2026, 10, 22, 10, 30, tzinfo=timezone.utc)
+        self.draft('newer-draft')
+        self.time = datetime(2026, 10, 22, 11, tzinfo=timezone.utc)
+        self.send(result)
+        row = self.db.execute("SELECT activity_at,sent_at FROM email_messages WHERE id='delayed'").fetchone()
+        self.assertEqual(tuple(row), (self.engine.now(), self.engine.now()))
+        latest = self.db.execute("SELECT id FROM email_messages WHERE thread_id='thread_quote' ORDER BY activity_at DESC LIMIT 1").fetchone()[0]
+        self.assertEqual(latest, 'delayed')
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.execute("UPDATE email_address_assignments SET ended_at='2026-10-22T10:30:00.000Z' WHERE id='assignment_sales'")
+
+    def test_invalid_copy_addresses_never_modify_recipients_or_create_reviews(self):
+        self.draft()
+        invalid = ['<alice@example.invalid>', 'audit@example.invalid,', 'audit@example.invalid;',
+                   'a\x00@example.invalid', 'a\x7f@example.invalid', 'a\x01@example.invalid',
+                   'Name<a@example.invalid>', 'a@example.invalid\n', 'a..b@example.invalid',
+                   '.a@example.invalid', 'a.@example.invalid', 'a@-example.invalid',
+                   'a@example..invalid', 'a@example.invalid>', 'a@[127.0.0.1]',
+                   'a' * 65 + '@example.invalid', 'a@' + 'b' * 64 + '.invalid']
+        for kind in ('cc', 'bcc'):
+            for address in invalid:
+                with self.subTest(kind=kind, address=repr(address)):
+                    # A valid cc entry must not be partially inserted if bcc is bad.
+                    settings = {'cc': ['valid@example.invalid'], kind: [address]}
+                    self.policy(4, **settings)
+                    with self.assertRaises(rules.GovernanceError):
+                        self.evaluate('draft')
+                    self.assertEqual(self.db.execute("SELECT COUNT(*) FROM email_message_recipients WHERE message_id='draft' AND kind<>'to'").fetchone()[0], 0)
+                    self.assertEqual(self.db.execute("SELECT COUNT(*) FROM email_reviews WHERE message_id='draft'").fetchone()[0], 0)
+
+    def test_copy_addresses_allow_normal_dot_atom_mailboxes(self):
+        self.policy(4, cc=["o'connor+sales@example.invalid", 'first.last@sub-domain.example.invalid'])
+        result = self.evaluate(self.draft())
+        self.assertEqual(result['decision'], 'send now')
+        self.send(result)
+
     def test_daily_limit_reserves_approvals_and_releases_next_day(self):
         # Existing sales seed contains one sent message on this UTC day.
         self.policy(4, daily_limit=2)
