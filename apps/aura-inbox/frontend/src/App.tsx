@@ -15,12 +15,12 @@ type MessagePage = { thread: Thread; messages: Message[]; nextCursor: string | n
 
 function Icon({ name, size = 20 }: { name: string; size?: number }) {
   const paths: Record<string,string> = {
-    inbox: 'M4 4h16v16H4z M4 13h4l2 3h4l2-3h4',
-    search: 'M21 21l-5-5 M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0',
-    refresh: 'M20 7v5h-5 M4 17v-5h5 M6.1 7a7 7 0 0 1 11.5-2L20 8 M4 16l2.4 3A7 7 0 0 0 18 17',
-    arrow: 'm9 5 7 7-7 7', back: 'm15 5-7 7 7 7', mail: 'M3 5h18v14H3z m0 0 9 7 9-7',
-    attachment: 'm8 12 6-6a4 4 0 0 1 6 6L10 22a6 6 0 0 1-8-8L12 4 M6 16l9-9',
-    check: 'm5 12 4 4L19 6', external: 'M14 3h7v7 m0-7-11 11 M10 3H3v18h18v-7',
+    inbox: 'M22 12h-6l-2 3h-4l-2-3H2 M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z',
+    search: 'm21 21-4.34-4.34 M19 11a8 8 0 1 1-16 0 8 8 0 0 1 16 0',
+    refresh: 'M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8 M21 3v5h-5 M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16 M8 16H3v5',
+    back: 'm15 18-6-6 6-6', mail: 'M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z M22 7l-10 6L2 7',
+    attachment: 'm21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48',
+    check: 'M20 6 9 17l-5-5',
   };
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name] || paths.mail}/></svg>;
 }
@@ -68,13 +68,13 @@ function MessageCard({ message: m, auraId }: { message: Message; auraId: string 
     try { setBody(await get(`/api/auras/${auraId}/messages/${m.id}/body`)); }
     catch (e) { setError((e as Error).message); } finally { setLoading(false); }
   };
-  return <article className="message-card">
+  return <article className={m.direction === 'out' ? 'message-card outbound' : 'message-card'}>
     <div className="message-heading"><span className="sender-avatar">{initials(m.from_name || m.from_address)}</span>
       <div className="sender-detail"><strong>{m.from_name || m.from_address}</strong>{m.from_name && <span>{m.from_address}</span>}</div>
       <time dateTime={m.activity_at}>{date(m.activity_at,true)}</time>
     </div>
     <div className="recipient-line">To: {m.recipients.filter(r => r.kind === 'to').map(r => r.address).join(', ') || '—'}
-      {m.recipients.some(r => r.kind === 'cc') && <span> · Cc: {m.recipients.filter(r => r.kind === 'cc').map(r => r.address).join(', ')}</span>}</div>
+      {m.recipients.some(r => r.kind === 'cc') && <span className="recipient-cc">Cc: {m.recipients.filter(r => r.kind === 'cc').map(r => r.address).join(', ')}</span>}</div>
     {m.body_storage === 'r2' && !body ? <button className="text-button" onClick={load} disabled={loading}>{loading ? 'Loading message…' : 'Load full message'}</button>
       : <MessageBody text={plain(body?.body_text ?? m.body_text,body?.body_html ?? m.body_html)}/>}
     {error && <p className="inline-error" role="alert">{error}</p>}
@@ -199,34 +199,32 @@ export function App() {
 
   return <div className={`app ${threadId ? 'has-conversation' : ''}`}>
     <aside className="sidebar">
-      <a href="/" className="brand"><span className="brand-mark">a</span><span>aura<span className="brand-dot">.</span></span></a>
-      <div className="workspace-label">YOUR WORKSPACE</div>
-      <div className="workspace"><span className="workspace-icon">34</span><div><strong>34Five Studio</strong><small>Email workspace</small></div><span className="test-chip">TEST</span></div>
-      <div className="nav-item"><Icon name="inbox"/><span>Inbox</span><span className="nav-count">{auras.reduce((n,a) => n+a.thread_count,0)}</span></div>
-      <div className="section-label">AURA INBOXES <span>{auras.length.toString().padStart(2,'0')}</span></div>
+      <a href="/" className="brand">34Five<small>Aura inbox</small></a>
+      <div className="section-label">Aura inboxes</div>
       <nav className="aura-nav" aria-label="Aura inboxes">{auras.map((a,index) => <button key={a.id} className={`aura-button ${a.id === auraId ? 'active' : ''}`} onClick={() => { setAuraId(a.id); setThreadId(''); setSearch(''); setStatus(''); }} aria-current={a.id === auraId ? 'page' : undefined}>
         <span className={`aura-avatar tone-${index%3}`}>{initials(a.name.replace(' Aura',''))}</span><span className="aura-label"><strong>{a.name.replace(/ Aura$/,'')}</strong><small>{a.addresses.find(x => x.domain_status === 'active')?.address || 'No receiving address'}</small></span><span className="aura-count">{a.thread_count}</span>
       </button>)}</nav>
-      <div className="sidebar-footer"><span className="live-dot"/><div><strong>Connected to Cloudflare</strong><small>New mail refreshes automatically</small></div></div>
-      <div className="test-note">Test workspace · Public access<br/>Use test messages only.</div>
+      <div className="test-note"><strong>Test workspace</strong> Public access. Use test messages only.</div>
     </aside>
     <main className="main">
-      <header className="topbar"><div className="breadcrumb">Workspace <Icon name="arrow" size={12}/> Inbox <Icon name="arrow" size={12}/><strong>{aura?.name || 'Auras'}</strong></div><div className="topbar-right"><span className="read-only"><span/>Read-only</span><span className="profile">34</span></div></header>
-      <div className="page-heading"><div><div className="eyebrow">A SPACE FOR EVERY CONVERSATION</div><h1>{aura?.name.replace(/ Aura$/,'') || 'Your'} inbox<span className="heading-dot">.</span></h1><p>{liveAddress ? <><span className="live-dot"/>Receiving at <span className="mail-address">{liveAddress}</span></> : 'Select an Aura to explore its conversations.'}</p></div><button className="refresh-button" onClick={() => setRefreshKey(n => n+1)}><Icon name="refresh" size={16}/>Refresh</button></div>
+      <header className="topbar">
+        <div className="topbar-title"><h1>{aura?.name.replace(/ Aura$/,'') || 'Your'} inbox</h1><p>{liveAddress ? <>Receiving at <span className="mail-address">{liveAddress}</span></> : 'Select an Aura to view its conversations.'}</p></div>
+        <div className="search"><Icon name="search" size={16}/><input aria-label="Search conversations" placeholder="Search subject or sender" value={search} onChange={e => setSearch(e.target.value)}/>{search && <button aria-label="Clear search" onClick={() => setSearch('')}>×</button>}</div>
+        <div className="topbar-right"><span className="read-only">Read-only</span><button className="refresh-button" onClick={() => setRefreshKey(n => n+1)}><Icon name="refresh" size={15}/>Refresh</button></div>
+      </header>
       <div className="inbox-layout">
         <section className="thread-panel" aria-label="Conversations">
           <div className="list-toolbar"><h2>Conversations <span>{threads.length}</span></h2><select aria-label="Filter conversation status" value={status} onChange={e => setStatus(e.target.value)}><option value="">All mail</option><option value="open">Open</option><option value="closed">Closed</option><option value="archived">Archived</option></select></div>
-          <div className="search"><Icon name="search" size={17}/><input aria-label="Search conversations" placeholder="Search subject or sender" value={search} onChange={e => setSearch(e.target.value)}/>{search && <button aria-label="Clear search" onClick={() => setSearch('')}>×</button>}</div>
           <div className="thread-list">{error && <div className="error-box" role="alert">{error}<button onClick={() => setRefreshKey(n => n+1)}>Try again</button></div>}
             {loading && <div className="list-empty">Loading conversations…</div>}
-            {!loading && !error && threads.length === 0 && <div className="list-empty"><Icon name="inbox" size={30}/><strong>{query ? 'No matching conversations' : 'Your inbox is ready'}</strong><p>{query ? 'Try another subject or sender.' : 'Incoming messages for this Aura will appear here.'}</p></div>}
-            {threads.map(t => <button key={t.id} className={`thread-item ${t.id === threadId ? 'selected' : ''}`} onClick={() => setThreadId(t.id)}><div className="thread-top"><strong>{t.sender || aura?.name || 'Conversation'}</strong><time dateTime={t.last_activity_at}>{date(t.last_activity_at)}</time></div><h3>{t.subject || '(No subject)'}</h3><p>{t.preview || 'Open to view this conversation.'}</p><div className="thread-bottom"><span className={`status-tag ${t.inbox_status}`}>{t.inbox_status}</span><span>{t.message_count} {t.message_count === 1 ? 'message' : 'messages'}</span></div></button>)}
+            {!loading && !error && threads.length === 0 && <div className="list-empty"><Icon name="inbox" size={28}/><strong>{query || status ? 'No matching conversations' : 'No mail yet'}</strong><p>{query || status ? 'Try another search or status.' : 'Incoming messages for this Aura will appear here.'}</p></div>}
+            {threads.map(t => <button key={t.id} className={`thread-item ${t.id === threadId ? 'selected' : ''}`} onClick={() => setThreadId(t.id)}><div className="thread-top"><strong>{t.sender || aura?.name || 'Conversation'}</strong>{t.message_count > 1 && <span className="thread-count">{t.message_count}<span className="sr-only"> messages</span></span>}<time dateTime={t.last_activity_at}>{date(t.last_activity_at)}</time></div><h3>{t.subject || '(No subject)'}</h3><div className="thread-bottom"><p>{t.preview || 'Open to view this conversation.'}</p>{t.inbox_status !== 'open' && <span className={`status-tag ${t.inbox_status}`}>{t.inbox_status}</span>}</div></button>)}
             {threadCursor && <button className="load-more" disabled={moreBusy} onClick={moreThreads}>{moreBusy ? 'Loading…' : 'Load more conversations'}</button>}
-          </div><div className="sync-line"><span className={`live-dot ${error ? 'offline' : ''}`}/>{error ? 'Connection needs attention' : synced ? `Updated ${synced.toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'})}` : 'Connecting…'}<span>Auto-refresh · 5s</span></div>
+          </div><div className="sync-line"><span className={`live-dot ${error ? 'offline' : ''}`}/>{error ? 'Connection needs attention' : synced ? `Updated ${synced.toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'})}` : 'Connecting…'}<span>Refreshes every 5 seconds</span></div>
         </section>
         <section className="conversation-panel" aria-label="Message view">
-          {!threadId ? <div className="conversation-empty"><div className="mail-art"><div className="art-circle"/><Icon name="mail" size={42}/><span className="art-star">✦</span><span className="art-spark">+</span></div><span className="empty-eyebrow">LESS NOISE. MORE CONTEXT.</span><h2>A little space to focus.</h2><p>Select a conversation to read its messages.<br/>Each Aura keeps its own inbox, right here.</p><div className="empty-footer"><Icon name="check" size={14}/>Your conversations stay with their Aura</div></div>
-            : <><div className="conversation-header"><button className="back-button" aria-label="Back to conversations" onClick={() => setThreadId('')}><Icon name="back"/></button><div><div className="conversation-eyebrow">{aura?.name}</div><h2>{threadDetail?.subject || (loadingMessages ? 'Loading conversation…' : '(No subject)')}</h2></div>{threadDetail && <span className={`status-tag ${threadDetail.inbox_status}`}>{threadDetail.inbox_status}</span>}</div><div className="message-list">{messageError && <div className="error-box" role="alert">{messageError}<button onClick={() => setRefreshKey(n => n+1)}>Try again</button></div>}{loadingMessages && <div className="list-empty">Loading messages…</div>}{messageCursor && <button className="load-more" onClick={moreMessages}>Load earlier messages</button>}{messages.map(m => <MessageCard key={m.id} message={m} auraId={auraId}/>)}</div><div className="conversation-footer"><Icon name="inbox" size={15}/>You are viewing this conversation in read-only mode.</div></>}
+          {!threadId ? <div className="conversation-empty"><Icon name="mail" size={32}/><h2>Select a conversation</h2><p>Messages for this Aura open here.</p></div>
+            : <><div className="conversation-header"><button className="back-button" aria-label="Back to conversations" onClick={() => setThreadId('')}><Icon name="back"/></button><h2>{threadDetail?.subject || (loadingMessages ? 'Loading conversation…' : '(No subject)')}</h2>{threadDetail && <span className={`status-tag ${threadDetail.inbox_status}`}>{threadDetail.inbox_status}</span>}</div><div className="message-list">{messageError && <div className="error-box" role="alert">{messageError}<button onClick={() => setRefreshKey(n => n+1)}>Try again</button></div>}{loadingMessages && <div className="list-empty">Loading messages…</div>}{messageCursor && <button className="load-more" onClick={moreMessages}>Load earlier messages</button>}{messages.map(m => <MessageCard key={m.id} message={m} auraId={auraId}/>)}</div><div className="conversation-footer"><Icon name="inbox" size={15}/>You are viewing this conversation in read-only mode.</div></>}
         </section>
       </div>
     </main>
