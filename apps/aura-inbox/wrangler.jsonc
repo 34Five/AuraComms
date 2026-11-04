@@ -12,7 +12,11 @@
     "not_found_handling": "single-page-application",
     "run_worker_first": ["/api", "/api/*"]
   },
-  "vars": { "DEMO_ORG_ID": "org_demo_001", "TEST_MODE": "true", "AUTO_REPLY_ENABLED": "true" },
+  "vars": {
+    "DEMO_ORG_ID": "org_demo_001", "TEST_MODE": "true", "AUTO_REPLY_ENABLED": "true",
+    "AUTO_REPLY_MODE": "fixed", "DEFAULT_LLM_MODEL": "gemini:gemini-3.5-flash-lite",
+    "LLM_SENDER_HOURLY_CAP": "10", "LLM_AURA_DAILY_CAP": "200"
+  },
   "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["support-test@34five.studio", "sales-test@34five.studio"] }],
   "d1_databases": [{
     "binding": "DB", "database_name": "development_replica",

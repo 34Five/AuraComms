@@ -355,6 +355,9 @@ button:focus-visible, a:focus-visible, select:focus-visible, summary:focus-visib
 .error-box button:hover { background: var(--accent-hover); }
 
 .inline-error { margin-top: var(--space-2); color: var(--badge-red-ink); font-size: var(--text-sm); }
+.reply-failed { margin-top: var(--space-3); padding: var(--space-3) var(--space-4); border-radius: var(--radius-tile); background: var(--badge-red-bg); color: var(--badge-red-ink); font-size: var(--text-sm); line-height: 1.6; overflow-wrap: anywhere; }
+.reply-failed strong { font-weight: 600; }
+.reply-generating { margin-top: var(--space-3); color: var(--ink-muted); font-size: var(--text-sm); font-style: italic; }
 
 .load-more, .text-button { display: block; padding: 7px var(--space-4); border-radius: var(--radius-pill); font-size: var(--text-sm); font-weight: 500; }
 .load-more { margin: var(--space-3) auto; border: 1px solid var(--rule); background: var(--surface-paper); }
