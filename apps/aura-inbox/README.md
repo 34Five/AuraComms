@@ -1,8 +1,8 @@
 # Aura inbox test
 
-A read-only inbox for each Aura, with real incoming email. One Cloudflare Worker serves the React/Vite UI and `/api` endpoints.
+An inbox and email governance console for four demo Auras, with real incoming email. One Cloudflare Worker serves the React/Vite UI and `/api` endpoints.
 
-This is a public test deployment with no login. `DEMO_ORG_ID` limits all queries and inbound routing to `org_demo_001`. It is not authentication. Use test messages only. Add authentication and member/Aura authorization before using customer data.
+This is a public test deployment with no login. `DEMO_ORG_ID` limits all queries and inbound routing to `org_demo_001`. It is not authentication. Use test messages only. Management requires a server secret and a server-selected active reviewer. Full user authentication is still required before using customer data.
 
 Deployed at https://aura-inbox-test.cassius-kellogg.workers.dev. The API uses the same origin under `/api`.
 
@@ -35,20 +35,24 @@ Email HTML becomes text. Scripts, remote images, and interactive email content d
 
 ## Incoming mail
 
-Cloudflare Email Routing sends only the two new test aliases to `aura-inbox-test`:
+Cloudflare Email Routing sends the four test aliases to `aura-inbox-test`:
 
-- `support-test@34five.studio` → existing `aura_demo_001` (Customer Support Aura).
-- `sales-test@34five.studio` → existing `aura_demo_002` (Sales Aura).
+- `support-test@34five.studio` → existing `aura_demo_001` (Customer Support Aura, Tier 1).
+- `sales-test@34five.studio` → existing `aura_demo_002` (Sales Aura, Tier 2).
+- `operations-test@34five.studio` → `aura_demo_003` (Operations Aura, Tier 3).
+- `notifications-test@34five.studio` → `aura_demo_004` (Notifications Aura, Tier 4).
 
 The existing `spike-test` and `anthony` routes and catch-all remain unchanged.
 
 ### Default test replies
 
-`AUTO_REPLY_ENABLED=true` enables a fixed demo response for both real test addresses. The reply uses the receiving Aura's name and address. It preserves the conversation subject and uses Cloudflare's native reply API for sender validation and threading. Mention `attachment` or include an attachment to receive `aura-demo.txt`. Uploaded files are not echoed back.
+`AUTO_REPLY_ENABLED=true` creates a fixed demo response for valid incoming test mail. The governance engine evaluates the draft before dispatch. Tier 1 holds every response. Tier 2 holds the first outgoing message in a conversation. Tier 3 holds the first reply after incoming mail, but allows proactive outreach. Tier 4 allows automatic sending. Tier 2/3 unlock only after the qualifying approved message successfully sends.
+
+Responses use the Aura name and address. Mention `attachment` or include an attachment to receive `aura-demo.txt`. Uploaded files are not echoed back. The sender uses the email binding so held drafts can send after review. Stored `In-Reply-To` and `References` headers preserve threading. Only new incoming mail creates responses. Existing seeded mail is not answered retroactively.
 
 Outgoing replies, recipients, and sample attachments are saved in the same Aura conversation. A reply is marked `sent` only after provider acceptance. Recipient delivery remains `accepted`, not `delivered`. The existing seeded messages are not answered retroactively.
 
-The handler skips automated mail, mailing lists, bounces, known test-address senders, invalid Message-IDs, and threads with 20 references. It ignores incoming Reply-To redirection. A unique D1 send key claims each sender/Message-ID pair within the Aura before a provider call. The active address assignment is checked again before dispatch. Duplicate deliveries cannot create a second reply claim.
+The handler skips automated mail, mailing lists, bounces, known test-address senders, invalid Message-IDs, and threads with 20 references. Delayed replies require a passing DMARC result from Cloudflare’s first trusted authentication header. The header sender must match the envelope sender. It ignores incoming Reply-To redirection. A unique D1 send key claims each sender/Message-ID pair within the Aura before a provider call. The active address assignment, policy snapshot, content hash, review epoch, reviewer assignment and daily limit are checked before dispatch. Duplicate deliveries cannot create a second reply claim.
 
 Provider timeouts leave the claimed reply in `sending` with an `unknown` event. They do not trigger retries. A tracking failure after provider acceptance also keeps the claim. Reconciliation is manual in this test version. A crash after incoming persistence but before the reply claim can leave mail without a reply. It does not resend automatically. Set `AUTO_REPLY_ENABLED=false` and deploy to disable replies.
 
@@ -84,7 +88,67 @@ To verify externally, send a test email to each alias. Confirm the message appea
 - The existing 51 schema/lifecycle tests and 68 spike tests passed.
 - TypeScript, Vite production build, and Wrangler deployment checks passed.
 - The local Cloudflare runtime processed a synthetic MIME email twice and stored one Sales message. The Support inbox did not return it.
-- Native default replies passed in the local Cloudflare emulator for both real test addresses. Each conversation stored one incoming message and one sent reply with a sample attachment. Repeated deliveries did not send another reply.
+- Before governance integration, native default replies passed in the local Cloudflare emulator for both real test addresses. Each conversation stored one incoming message and one sent reply with a sample attachment. Repeated deliveries did not send another reply.
 - Live API checks returned populated seeded messages for each Aura and `404` for cross-Aura thread lookups.
 - Both real receiving addresses are active in D1 and have enabled Cloudflare rules. The spike-test, anthony, and catch-all rules retained their prior IDs and actions.
 - Live browser checks covered both inboxes and conversation loading. No external SMTP test message was sent during setup.
+
+## Governance management
+
+Click **Manage governance** and enter `GOVERNANCE_ADMIN_TOKEN`. The UI keeps it in React memory across workspace pages and discards it on refresh or Lock management. It never stores the credential in a URL or browser storage. Configure it with `wrangler secret put GOVERNANCE_ADMIN_TOKEN`. `GOVERNANCE_REVIEWER_MEMBER_ID` identifies the existing demo member on the server. Request bodies cannot select an approver. All management reads require the credential and current workspace membership. Mutations require a same-origin request. Governance decisions and policy changes also require an active designated reviewer. The credential grants workspace administration for Aura configuration and reviewer assignments.
+
+The console provides review and rejection, a separate Send email action, draft editing and reevaluation, tier settings, daily limits, Tier 4 Cc/Bcc, new outgoing conversations, and the latest 100 review revisions. Open the Conversations tab on the Governance page to reset a review requirement. A reset preserves sent history and supersedes unsent decisions. Editing content or changing policy invalidates old approvals. An unchanged rejected draft stays rejected.
+
+`GovernanceCoordinator` serializes the organization’s API requests and incoming mail with a Durable Object concurrency barrier. D1 batches preserve atomic state transitions. Every provider call has a persistent `sending` claim. Uncertain results keep that claim and consume daily capacity until reconciled. There is no automatic retry or scheduled drain. Held drafts require an explicit send after approval. Newly evaluated automatic inbound drafts send immediately. A composed draft always requires the separate Send email action, which makes the outbound demo reviewable.
+
+Daily limits count sent messages, same-day approval reservations, and unresolved sends. Days use UTC. Unknown guardrails and invalid tier values fail closed. Copies apply to Tier 4 and are included in the reviewed content hash. Policy changes preserve existing draft recipient rows. This UI edits subject and text only. It does not remove existing copies or edit attachments.
+
+### Provision the four Auras
+
+After the governance migration and the original address provisioning, run:
+
+```sh
+node scripts/provision-governance.mjs --remote
+```
+
+The script checks existing Aura identities, the migrated reviews table, reviewer membership and address ownership. It reuses Customer Support and Sales. It creates only Operations and Notifications. It assigns tiers only to unconfigured policies and never overwrites an existing different tier. Repeated runs preserve messages, policy versions and reviewer revocations. Add only the two new literal Email Routing rules, each targeting `aura-inbox-test`. Inspect existing rules and catch-all before and after the change.
+
+Do not import the parent fixture, local seed or schema migrations into the populated remote database. The governance provisioning SQL changes demo data only. The Worker deployment adds the `governance-v1` Durable Object migration. Existing D1 schema migrations remain unchanged.
+
+
+### Verification on November 4, 2026
+
+- 63 inbox, MIME, quote-parser and governance tests pass with the real SQLite schema and foreign keys. They cover all four tiers, policy/content changes, rejection, resets, reviewer revocation, limits, concurrent dispatch, copies and uncertain sends.
+- The 79 schema and reference-engine tests pass. TypeScript, Vite build and Wrangler deployment checks pass.
+- The deployed browser shows all four Auras and their tiers. Reviewer unlock, policy settings, compose controls and switching Auras pass browser checks.
+- Both new address assignments and literal routing rules are active. Existing Support, Sales, spike-test, anthony and catch-all rules retain their IDs and actions.
+- Email Sending is enabled for `34five.studio`. No external SMTP message was sent during this change. Provider dispatch is covered by local binding mocks. External receipt and delivery still require a test from a real mailbox.
+
+
+## Separate management pages
+
+- `/` is the inbox. It links to management and retains conversation deep links through `?aura=...&thread=...`.
+- `/governance` has an Aura picker, policy creation/update/removal, reviews, draft cancellation, compose and conversation resets. Policy removal pauses outgoing sends. It preserves the policy row with a higher version, so recreating a policy cannot revive old decisions.
+- `/auras` provides Aura creation, reading, renaming and deletion of unused Auras. It also provides reviewer assignment/revocation and address enable/disable controls. New Auras default to Tier 1 and designate the configured manager as reviewer. New Aura creation does not provision a mail address or Cloudflare route.
+- `/email-settings` provides domain-level DKIM setup instructions, exact provider-issued records, copy controls and live DNS verification. All Auras on a domain share its setup. Key generation and DNS changes remain in Cloudflare. The app never accepts a private signing key.
+
+Aura deletion refuses any message/thread or address assignment history. Disabling an assigned address preserves its assignment and mail history, rejects incoming mail for that address and blocks sends. Disabling and re-enabling an address cannot revive old approvals. Reviewer revocation similarly supersedes that reviewer’s unsent approvals. Workspace administration remains available to reassign a reviewer if the manager removes their own reviewer designation.
+
+### Load the domain’s public DNS records
+
+After enabling Email Sending in Cloudflare, import its public records:
+
+```sh
+node scripts/sync-email-dns.mjs --remote --domain 34five.studio --zone-id 1c60311626bbfe94b6fe3496d15de727
+```
+
+The script checks tenant/domain/zone ownership, reads provider DNS records and records their values and provider identity in `email_domains`. It does not modify DNS, enable a domain, or change mail routes. Never invent or manually generate DKIM key values for this page.
+
+The Verify DNS records action compares the provider values with the fixed Cloudflare DNS-over-HTTPS resolver. TXT comparison handles split quoted strings. Resolver failure is reported as unavailable. Missing or different records are reported separately. Verification does not change domain activation or prove recipient delivery.
+
+These changes use the existing migrated tables. No new D1 schema migration is required.
+
+
+### Management verification
+
+The deployed desktop and mobile pages pass isolated browser checks. The checks select an Aura on the standalone governance page and create, rename and delete a temporary Aura. The final demo contains the same four Auras. Live DNS verification confirms DKIM, SPF, bounce MX and DMARC records for `34five.studio`. The verifier compares required authentication tags and accepts valid additional reporting tags. No DNS records or external email messages are changed by verification.

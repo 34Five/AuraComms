@@ -1,4 +1,6 @@
 import type { Env } from './types.ts';
+import { managementApi } from './management-api.ts';
+import { governanceApi } from './governance-api.ts';
 import { HttpError } from './types.ts';
 import { cursor, encodeCursor, json, pageSize, requireId } from './utils.ts';
 
@@ -22,19 +24,23 @@ export async function api(request: Request, env: Env): Promise<Response> {
   if (env.TEST_MODE !== 'true' || !env.DEMO_ORG_ID || env.DEMO_ORG_ID === 'org') {
     throw new HttpError(503, 'The test inbox is not configured.');
   }
-  if (request.method !== 'GET') return json({ error: 'This inbox is read-only.' }, 405);
+  if (!['GET','POST','PUT','DELETE'].includes(request.method)) return json({error:'Method not allowed.'},405);
   const url = new URL(request.url);
   const path = url.pathname.replace(/\/$/, '');
   const org = env.DEMO_ORG_ID;
-  if (path === '/api/health') {
+  if (path === '/api/manage' || path.startsWith('/api/manage/')) return managementApi(request,env);
+  if (path === '/api/health' && request.method === 'GET') {
     await env.DB.prepare('SELECT 1').first();
     return json({ status: 'ok', mode: 'public-test', organization: org });
   }
+  if (path === '/api/auras' && request.method !== 'GET') return json({error:'Method not allowed.'},405);
   if (path === '/api/auras') {
     const { results } = await env.DB.prepare(`SELECT a.id, a.name,
+      (SELECT p.tier FROM email_aura_policies p WHERE p.org_id=a.org_id AND p.aura_id=a.id) AS tier,
+      (SELECT COUNT(*) FROM email_reviews r JOIN email_messages m ON m.org_id=r.org_id AND m.aura_id=r.aura_id AND m.id=r.message_id WHERE r.org_id=a.org_id AND r.aura_id=a.id AND r.status='pending' AND m.status IN ('draft','queued')) AS pending_count,
       (SELECT COUNT(*) FROM email_threads t WHERE t.org_id=a.org_id AND t.aura_id=a.id) AS thread_count,
       (SELECT COUNT(*) FROM email_messages m WHERE m.org_id=a.org_id AND m.aura_id=a.id) AS message_count
-      FROM auras a WHERE a.org_id=? ORDER BY a.name, a.id`).bind(org).all<Row>();
+      FROM auras a WHERE a.org_id=? ORDER BY CASE WHEN tier IN ('1','2','3','4') THEN CAST(tier AS INTEGER) ELSE 5 END, a.name, a.id`).bind(org).all<Row>();
     const addresses = await env.DB.prepare(`SELECT x.aura_id, e.address, e.status, d.status AS domain_status
       FROM email_address_assignments x JOIN email_addresses e ON e.org_id=x.org_id AND e.id=x.address_id
       JOIN email_domains d ON d.org_id=e.org_id AND d.id=e.domain_id
@@ -45,6 +51,9 @@ export async function api(request: Request, env: Env): Promise<Response> {
   if (parts[0] !== 'api' || parts[1] !== 'auras' || !parts[2]) throw new HttpError(404, 'Endpoint not found.');
   const auraId = requireId(parts[2]);
   const selectedAura = await aura(env, auraId);
+  const governance = await governanceApi(request,env,auraId,parts);
+  if (governance) return governance;
+  if (request.method !== 'GET') return json({error:'Method not allowed.'},405);
   if (parts.length === 4 && parts[3] === 'inbox') {
     const limit = pageSize(url);
     const after = cursor(url.searchParams.get('cursor'));
@@ -74,7 +83,7 @@ export async function api(request: Request, env: Env): Promise<Response> {
   }
   if (parts.length === 6 && parts[3] === 'threads' && parts[5] === 'messages') {
     const threadId = requireId(parts[4]);
-    const thread = await env.DB.prepare('SELECT id, subject, inbox_status, last_activity_at FROM email_threads WHERE org_id=? AND aura_id=? AND id=?')
+    const thread = await env.DB.prepare('SELECT id, subject, inbox_status, last_activity_at, review_epoch, tier_state FROM email_threads WHERE org_id=? AND aura_id=? AND id=?')
       .bind(org, auraId, threadId).first<Row>();
     if (!thread) throw new HttpError(404, 'Conversation not found.');
     const limit = pageSize(url);

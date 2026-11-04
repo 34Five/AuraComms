@@ -12,8 +12,10 @@
     "not_found_handling": "single-page-application",
     "run_worker_first": ["/api", "/api/*"]
   },
-  "vars": { "DEMO_ORG_ID": "org_demo_001", "TEST_MODE": "true", "AUTO_REPLY_ENABLED": "true" },
-  "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["support-test@34five.studio", "sales-test@34five.studio"] }],
+  "vars": { "DEMO_ORG_ID": "org_demo_001", "TEST_MODE": "true", "AUTO_REPLY_ENABLED": "true", "GOVERNANCE_REVIEWER_MEMBER_ID": "member_demo_001" },
+  "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["support-test@34five.studio", "sales-test@34five.studio", "operations-test@34five.studio", "notifications-test@34five.studio"] }],
+  "durable_objects": { "bindings": [{ "name": "GOVERNANCE", "class_name": "GovernanceCoordinator" }] },
+  "migrations": [{ "tag": "governance-v1", "new_sqlite_classes": ["GovernanceCoordinator"] }],
   "d1_databases": [{
     "binding": "DB", "database_name": "development_replica",
     "database_id": "d24ded08-d1cc-4fd1-9834-4185a3046a21"

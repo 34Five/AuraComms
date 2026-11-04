@@ -16,3 +16,4 @@ AXI-8 tier rules and mocked approval state machine: [docs/email-governance.md](d
 python3 scripts/email_rules_demo.py
 ```
 
+The inbox includes separate [governance, Aura management and email setup pages](apps/aura-inbox/README.md#separate-management-pages).

@@ -1,5 +1,9 @@
 export interface Env {
   DB: D1Database;
+  GOVERNANCE: DurableObjectNamespace;
+  EMAIL?: SendEmail;
+  GOVERNANCE_ADMIN_TOKEN?: string;
+  GOVERNANCE_REVIEWER_MEMBER_ID?: string;
   MAIL: R2Bucket;
   ASSETS: Fetcher;
   DEMO_ORG_ID: string;

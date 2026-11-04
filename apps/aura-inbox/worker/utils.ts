@@ -41,7 +41,7 @@ export function messageIds(header: string | null | undefined): string[] {
   return [...header.matchAll(/<([^<>\s]+@[^<>\s]+)>/g)].map(match => match[1]).slice(-100);
 }
 
-export async function readBounded(stream: ReadableStream<Uint8Array>, limit: number): Promise<Uint8Array> {
+export async function readBounded(stream: ReadableStream<Uint8Array>, limit: number, errorMessage = 'Email exceeds 25 MiB.'): Promise<Uint8Array> {
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
@@ -50,7 +50,7 @@ export async function readBounded(stream: ReadableStream<Uint8Array>, limit: num
       const { done, value } = await reader.read();
       if (done) break;
       size += value.byteLength;
-      if (size > limit) { await reader.cancel(); throw new HttpError(413, 'Email exceeds 25 MiB.'); }
+      if (size > limit) { await reader.cancel(); throw new HttpError(413, errorMessage); }
       chunks.push(value);
     }
   } finally { reader.releaseLock(); }

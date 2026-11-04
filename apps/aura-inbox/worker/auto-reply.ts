@@ -1,28 +1,23 @@
 import type { Email } from 'postal-mime';
 import type { Env } from './types.ts';
 import { messageIds } from './utils.ts';
+import { Governance, TEST_ADDRESSES } from './governance.ts';
 
-const ADDRESSES = new Set(['support-test@34five.studio', 'sales-test@34five.studio']);
+const ADDRESSES = new Set(TEST_ADDRESSES);
 const SAMPLE = '34Five Aura email demo attachment.\nThis is a sample file for testing only.\n';
 const encoder = new TextEncoder();
 type Context = { org_id: string; aura_id: string; address_id: string; assignment_id: string; message_id: string; thread_id: string };
-
-function diagnostic(error: unknown): { code: string; message: string } {
-  const clean = (s: unknown) => String(s).replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 512);
-  return {
-    code: clean(error && typeof error === 'object' && 'code' in error ? error.code : 'E_REPLY_UNKNOWN'),
-    message: clean(error instanceof Error ? error.message : typeof error === 'string' ? error : 'Reply outcome is unknown.'),
-  };
-}
 
 export async function autoReply(message: ForwardableEmailMessage, env: Env, parsed: Email, context: Context): Promise<void> {
   if (env.TEST_MODE !== 'true' || env.AUTO_REPLY_ENABLED !== 'true') return;
   const address = message.to.trim().toLowerCase();
   const log = (event: string, fields: Record<string, unknown> = {}) => console.log(JSON.stringify({ event, message_id: context.message_id, ...fields }));
   const skip = (reason: string) => log('inbox_auto_reply_skipped', { reason });
+  if (typeof message.reply !== 'function' && message.headers.get('x-aura-dmarc-pass') !== 'true') return skip('sender_not_authenticated');
   if (!ADDRESSES.has(address)) return skip('not_test_address');
   if (!/^[^\s<>@,;\x00-\x1f\x7f]+@[^\s<>@,;\x00-\x1f\x7f]+$/.test(message.from)) return skip('invalid_sender');
   const sender = message.from.toLowerCase();
+  if (parsed.from?.address?.toLowerCase() !== sender) return skip('sender_header_mismatch');
   if (ADDRESSES.has(sender) || sender === 'spike-test@34five.studio' || /^(?:mailer-daemon|postmaster|no-?reply)@/i.test(sender)) return skip('automated_sender');
   const values = (name: string) => {
     const found = parsed.headers.filter(h => h.key === name).map(h => h.value);
@@ -68,7 +63,7 @@ export async function autoReply(message: ForwardableEmailMessage, env: Env, pars
   const claim = await env.DB.prepare(`INSERT INTO email_messages
     (id,org_id,aura_id,thread_id,email_address_id,address_assignment_id,direction,status,send_idempotency_key,
     envelope_from,envelope_to,from_address,from_name,subject,body_storage,body_text,body_size_bytes,in_reply_to,references_json,activity_at,created_at)
-    VALUES (?,?,?,?,?,?,'out','sending',?,?,?,?,?,?,'inline',?,?,?,?,?,?) ON CONFLICT DO NOTHING`)
+    VALUES (?,?,?,?,?,?,'out','draft',?,?,?,?,?,?,'inline',?,?,?,?,?,?) ON CONFLICT DO NOTHING`)
     .bind(id,context.org_id,context.aura_id,context.thread_id,context.address_id,context.assignment_id,sendKey,
       address,message.from,address,active.name,replySubject,text,encoder.encode(text).byteLength,parentId,JSON.stringify(chain),now,now).run();
   if (!claim.meta.changes) return skip('duplicate_reply_claim');
@@ -93,41 +88,21 @@ export async function autoReply(message: ForwardableEmailMessage, env: Env, pars
     log('inbox_auto_reply_preparation_failed', { reply_id: id });
     return;
   }
-  let result: EmailSendResult;
+  const governance = new Governance(env);
   try {
     if (!await activeRoute()) {
       await env.DB.prepare("UPDATE email_messages SET status='cancelled' WHERE org_id=? AND aura_id=? AND id=?")
         .bind(context.org_id,context.aura_id,id).run();
       return skip('assignment_changed_before_send');
     }
-    result = await message.reply({
-      from: { email: address, name: active.name }, replyTo: address, subject: replySubject, text,
-      headers: { 'Auto-Submitted': 'auto-replied', 'X-Auto-Response-Suppress': 'All', 'X-Aura-Demo': 'true' },
-      ...(includeAttachment ? { attachments: [{ filename:'aura-demo.txt', type:'text/plain', disposition:'attachment' as const, content:btoa(SAMPLE) }] } : {}),
-    });
+    const review = await governance.evaluate(context.aura_id,id);
+    if (review.status === 'approved') {
+      const result = await governance.dispatch(context.aura_id,review.id,
+        typeof message.reply === 'function' ? builder => message.reply(builder) : undefined);
+      log('inbox_governed_reply',{reply_id:id,status:result.status});
+    } else log('inbox_reply_held',{reply_id:id,review_id:review.id,reason:review.reason});
   } catch (error) {
-    const detail = diagnostic(error);
-    // A failed native call can have an uncertain outcome. Leave it claimed and never retry automatically.
-    await env.DB.prepare(`INSERT INTO email_events (id,org_id,aura_id,message_id,event_type,dedup_key,occurred_at,raw_payload_json)
-      VALUES (?,?,?,?,'unknown',?,?,?) ON CONFLICT DO NOTHING`)
-      .bind(`${id}_unknown`,context.org_id,context.aura_id,id,`${id}:unknown`,new Date().toISOString(),JSON.stringify({send_status:'unknown',retry_safe:false,...detail}))
-      .run().catch(() => undefined);
-    log('inbox_auto_reply_error', { reply_id:id, ...detail, retry_safe:false });
-    return;
-  }
-  const sentAt = new Date().toISOString();
-  const rfcId = messageIds(result.messageId).at(-1) ?? (result.messageId?.replace(/^<|>$/g,'') || null);
-  try {
-    await env.DB.batch([
-      env.DB.prepare("UPDATE email_messages SET status='sent',sent_at=?,provider_message_id=?,rfc_message_id=?,activity_at=? WHERE org_id=? AND aura_id=? AND id=?")
-        .bind(sentAt,result.messageId,rfcId,sentAt,context.org_id,context.aura_id,id),
-      env.DB.prepare("UPDATE email_message_recipients SET delivery_status='accepted',delivery_status_at=? WHERE org_id=? AND aura_id=? AND message_id=?")
-        .bind(sentAt,context.org_id,context.aura_id,id),
-      env.DB.prepare('UPDATE email_threads SET last_activity_at=MAX(last_activity_at,?) WHERE org_id=? AND aura_id=? AND id=?')
-        .bind(sentAt,context.org_id,context.aura_id,context.thread_id),
-    ]);
-    log('inbox_auto_reply_sent',{ reply_id:id, provider_message_id:result.messageId });
-  } catch {
-    log('inbox_auto_reply_tracking_failed',{reply_id:id,provider_message_id:result.messageId,retry_safe:false});
+    // Keep the draft and claim. Missing/invalid policies must never fall back to sending.
+    log('inbox_governance_hold',{reply_id:id,reason:error instanceof Error ? error.message : 'Evaluation failed.'});
   }
 }

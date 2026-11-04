@@ -4,3 +4,7 @@ __pycache__/
 *.sqlite-shm
 *.sqlite-wal
 .wrangler/
+
+# Local Worker secrets
+.dev.vars
+.dev.vars.*

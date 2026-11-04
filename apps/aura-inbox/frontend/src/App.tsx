@@ -1,8 +1,9 @@
+import { TIER_LABELS } from './GovernancePanel';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import DOMPurify from 'dompurify';
 import { fragmentToText, splitQuotedText } from './quoted-text.ts';
 
-type Aura = { id: string; name: string; thread_count: number; message_count: number;
+type Aura = { tier: string | null; pending_count: number; id: string; name: string; thread_count: number; message_count: number;
   addresses: { address: string; status: string; domain_status: string }[] };
 type Thread = { id: string; subject: string | null; sender: string | null; preview: string | null;
   last_activity_at: string; message_count: number; inbox_status: string };
@@ -83,10 +84,10 @@ function MessageCard({ message: m, auraId }: { message: Message; auraId: string 
   </article>;
 }
 
-export function App() {
+export function App({navigate}: {navigate:(path:string)=>void}) {
   const [auras,setAuras] = useState<Aura[]>([]);
   const [auraId,setAuraId] = useState(new URLSearchParams(location.search).get('aura') || '');
-  const [threadId,setThreadId] = useState('');
+  const [threadId,setThreadId] = useState(new URLSearchParams(location.search).get('thread') || '');
   const [threads,setThreads] = useState<Thread[]>([]);
   const [threadCursor,setThreadCursor] = useState<string | null>(null);
   const [messages,setMessages] = useState<Message[]>([]);
@@ -108,6 +109,7 @@ export function App() {
   const inboxPath = useMemo(() => `/api/auras/${auraId}/inbox?limit=25&q=${encodeURIComponent(query)}${status ? `&status=${status}` : ''}`,[auraId,query,status]);
   const messagePath = `/api/auras/${auraId}/threads/${threadId}/messages?limit=25`;
 
+  useEffect(()=>{const url=new URL(location.href);if(threadId)url.searchParams.set('thread',threadId);else url.searchParams.delete('thread');history.replaceState(null,'',url);},[threadId]);
   useEffect(() => { const timer = setTimeout(() => setQuery(search.trim()),250); return () => clearTimeout(timer); },[search]);
   useEffect(() => {
     const controller = new AbortController();
@@ -200,9 +202,10 @@ export function App() {
   return <div className={`app ${threadId ? 'has-conversation' : ''}`}>
     <aside className="sidebar">
       <a href="/" className="brand">34Five<small>Aura inbox</small></a>
+      <nav className="workspace-nav" aria-label="Workspace pages"><a className="active" href="/" aria-current="page" onClick={e=>{e.preventDefault();navigate('/');}}>Inbox</a><a href="/governance" onClick={e=>{e.preventDefault();navigate(`/governance?aura=${auraId}`);}}>Governance</a><a href="/auras" onClick={e=>{e.preventDefault();navigate('/auras');}}>Aura management</a><a href="/email-settings" onClick={e=>{e.preventDefault();navigate('/email-settings');}}>Email setup</a></nav>
       <div className="section-label">Aura inboxes</div>
       <nav className="aura-nav" aria-label="Aura inboxes">{auras.map((a,index) => <button key={a.id} className={`aura-button ${a.id === auraId ? 'active' : ''}`} onClick={() => { setAuraId(a.id); setThreadId(''); setSearch(''); setStatus(''); }} aria-current={a.id === auraId ? 'page' : undefined}>
-        <span className={`aura-avatar tone-${index%3}`}>{initials(a.name.replace(' Aura',''))}</span><span className="aura-label"><strong>{a.name.replace(/ Aura$/,'')}</strong><small>{a.addresses.find(x => x.domain_status === 'active')?.address || 'No receiving address'}</small></span><span className="aura-count">{a.thread_count}</span>
+        <span className={`aura-avatar tone-${index%3}`}>{initials(a.name.replace(' Aura',''))}</span><span className="aura-label"><strong>{a.name.replace(/ Aura$/,'')}</strong><small>{a.addresses.find(x => x.domain_status === 'active')?.address || 'No receiving address'}</small></span><span className="aura-count">{a.tier && <span className="sidebar-tier" title={TIER_LABELS[a.tier]}>T{a.tier}</span>}{a.pending_count > 0 ? `${a.pending_count} pending` : a.thread_count}</span>
       </button>)}</nav>
       <div className="test-note"><strong>Test workspace</strong> Public access. Use test messages only.</div>
     </aside>
@@ -210,7 +213,7 @@ export function App() {
       <header className="topbar">
         <div className="topbar-title"><h1>{aura?.name.replace(/ Aura$/,'') || 'Your'} inbox</h1><p>{liveAddress ? <>Receiving at <span className="mail-address">{liveAddress}</span></> : 'Select an Aura to view its conversations.'}</p></div>
         <div className="search"><Icon name="search" size={16}/><input aria-label="Search conversations" placeholder="Search subject or sender" value={search} onChange={e => setSearch(e.target.value)}/>{search && <button aria-label="Clear search" onClick={() => setSearch('')}>×</button>}</div>
-        <div className="topbar-right"><span className="read-only">Read-only</span><button className="refresh-button" onClick={() => setRefreshKey(n => n+1)}><Icon name="refresh" size={15}/>Refresh</button></div>
+        <div className="topbar-right"><button className="refresh-button" onClick={()=>navigate(`/governance?aura=${auraId}`)}>Manage governance</button><button className="refresh-button" onClick={() => setRefreshKey(n => n+1)}><Icon name="refresh" size={15}/>Refresh</button></div>
       </header>
       <div className="inbox-layout">
         <section className="thread-panel" aria-label="Conversations">
@@ -223,8 +226,8 @@ export function App() {
           </div><div className="sync-line"><span className={`live-dot ${error ? 'offline' : ''}`}/>{error ? 'Connection needs attention' : synced ? `Updated ${synced.toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'})}` : 'Connecting…'}<span>Refreshes every 5 seconds</span></div>
         </section>
         <section className="conversation-panel" aria-label="Message view">
-          {!threadId ? <div className="conversation-empty"><Icon name="mail" size={32}/><h2>Select a conversation</h2><p>Messages for this Aura open here.</p></div>
-            : <><div className="conversation-header"><button className="back-button" aria-label="Back to conversations" onClick={() => setThreadId('')}><Icon name="back"/></button><h2>{threadDetail?.subject || (loadingMessages ? 'Loading conversation…' : '(No subject)')}</h2>{threadDetail && <span className={`status-tag ${threadDetail.inbox_status}`}>{threadDetail.inbox_status}</span>}</div><div className="message-list">{messageError && <div className="error-box" role="alert">{messageError}<button onClick={() => setRefreshKey(n => n+1)}>Try again</button></div>}{loadingMessages && <div className="list-empty">Loading messages…</div>}{messageCursor && <button className="load-more" onClick={moreMessages}>Load earlier messages</button>}{messages.map(m => <MessageCard key={m.id} message={m} auraId={auraId}/>)}</div><div className="conversation-footer"><Icon name="inbox" size={15}/>You are viewing this conversation in read-only mode.</div></>}
+          {!threadId ? <div className="conversation-empty"><Icon name="mail" size={32}/><h2>Select a conversation</h2><p>{aura?.tier ? `Tier ${aura.tier} · ${TIER_LABELS[aura.tier]}` : 'Messages for this Aura open here.'}</p></div>
+            : <><div className="conversation-header"><button className="back-button" aria-label="Back to conversations" onClick={() => setThreadId('')}><Icon name="back"/></button><h2>{threadDetail?.subject || (loadingMessages ? 'Loading conversation…' : '(No subject)')}</h2>{threadDetail && <span className={`status-tag ${threadDetail.inbox_status}`}>{threadDetail.inbox_status}</span>}</div><div className="message-list">{messageError && <div className="error-box" role="alert">{messageError}<button onClick={() => setRefreshKey(n => n+1)}>Try again</button></div>}{loadingMessages && <div className="list-empty">Loading messages…</div>}{messageCursor && <button className="load-more" onClick={moreMessages}>Load earlier messages</button>}{messages.map(m => <MessageCard key={m.id} message={m} auraId={auraId}/>)}</div><div className="conversation-footer"><button className="secondary-button" onClick={()=>navigate(`/governance?aura=${auraId}`)}>Review drafts and policy</button></div></>}
         </section>
       </div>
     </main>
