@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import DOMPurify from 'dompurify';
+import { addressChip, isReceiving } from './address-state.ts';
 import { messageState } from './message-state.ts';
 import { fragmentToText, splitQuotedText } from './quoted-text.ts';
 
-type Aura = { id: string; name: string; thread_count: number; message_count: number;
-  addresses: { address: string; status: string; domain_status: string }[] };
+type AuraAddress = { address: string; status: string; domain_status: string; provisioning_status: string };
+type Aura = { id: string; name: string; thread_count: number; message_count: number; addresses: AuraAddress[] };
+type AddressDetail = { address: string; status: string; domain_status: string;
+  provisioning: { status: string; reason: string | null;
+    rule: { matchers: { value: string }[]; actions: { value: string[] }[] } | null } };
+type ProposedAddress = { id: string; domain: string; address: string };
 type Thread = { id: string; subject: string | null; sender: string | null; preview: string | null;
   last_activity_at: string; message_count: number; inbox_status: string };
 type Message = { id: string; direction: string; status: string; from_address: string; from_name: string | null;
@@ -31,6 +36,12 @@ async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
   const response = await fetch(path, { signal, cache: 'no-store' });
   const data = await response.json() as T & { error?: string };
   if (!response.ok) throw new Error(data.error || 'Unable to load your inbox.');
+  return data;
+}
+async function post<T>(path: string, body: object = {}): Promise<T> {
+  const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await response.json() as T & { error?: string };
+  if (!response.ok) throw new Error(data.error || 'The request failed. Please retry.');
   return data;
 }
 function initials(name: string) { return name.split(/\s+/).filter(Boolean).slice(0,2).map(n => n[0]).join('').toUpperCase(); }
@@ -90,6 +101,58 @@ function MessageCard({ message: m, auraId }: { message: Message; auraId: string 
   </article>;
 }
 
+function AddressPanel({ aura, onAddress }: { aura: Aura; onAddress: (auraId: string, address: AddressDetail) => void }) {
+  const current = aura.addresses[0];
+  const [proposal,setProposal] = useState<ProposedAddress[] | null>(null);
+  const [domainId,setDomainId] = useState('');
+  const [detail,setDetail] = useState<AddressDetail | null>(null);
+  const [busy,setBusy] = useState(false);
+  const [error,setError] = useState('');
+  const base = `/api/auras/${aura.id}/address`;
+  const unfinished = current && current.provisioning_status !== 'active' ? current.provisioning_status : '';
+
+  // The Aura list carries only the status. The reason and the rule to create come from the address itself.
+  useEffect(() => {
+    if (!unfinished) { setDetail(null); return; }
+    const controller = new AbortController();
+    get<{ address: AddressDetail }>(base,controller.signal).then(data => setDetail(data.address))
+      .catch(e => { if ((e as Error).name !== 'AbortError') setError((e as Error).message); });
+    return () => controller.abort();
+  },[base,unfinished]);
+
+  const run = async (work: () => Promise<void>) => {
+    setBusy(true); setError('');
+    try { await work(); } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+  };
+  const accept = (address: AddressDetail) => { setDetail(address); setProposal(null); onAddress(aura.id,address); };
+  const propose = () => run(async () => {
+    const { domains } = await get<{ domains: ProposedAddress[] }>(`${base}/proposal`);
+    setProposal(domains); setDomainId(domains[0].id);
+  });
+  const confirm = () => run(async () => accept((await post<{ address: AddressDetail }>(base,{ domain_id: domainId })).address));
+  const retry = () => run(async () => accept((await post<{ address: AddressDetail }>(`${base}/provision`)).address));
+  const errorLine = error && <p className="address-error" role="alert">{error}</p>;
+
+  if (!current) return <div className="address-panel">
+    {!proposal && <button className="rail-button" disabled={busy} onClick={propose}>{busy ? 'Checking…' : 'Generate email'}</button>}
+    {proposal && <>
+      {proposal.length === 1 ? <p className="address-text">{proposal[0].address}</p>
+        : <select className="address-select" aria-label={`Domain for ${aura.name}`} value={domainId} onChange={e => setDomainId(e.target.value)}>{proposal.map(d => <option key={d.id} value={d.id}>{d.address}</option>)}</select>}
+      <div className="address-actions"><button className="rail-button" disabled={busy} onClick={confirm}>{busy ? 'Creating…' : 'Create address'}</button><button className="rail-button" disabled={busy} onClick={() => setProposal(null)}>Cancel</button></div>
+    </>}
+    {errorLine}
+  </div>;
+  const chip = addressChip(current);
+  const rule = detail?.address === current.address ? detail.provisioning.rule : null;
+  return <div className="address-panel">
+    <p className="address-text">{current.address}</p>
+    <div className="address-actions"><span className={`status-tag ${chip.tone}`}>{chip.label}</span>{chip.retry && <button className="rail-button" disabled={busy} onClick={retry}>{busy ? 'Retrying…' : 'Retry'}</button>}</div>
+    {chip.retry && detail?.provisioning.reason && <p className="address-error" role="alert">{detail.provisioning.reason}</p>}
+    {chip.retry && rule && <details className="address-rule"><summary>Rule to create</summary><p>Custom address <code>{rule.matchers[0].value}</code>, action: send to Worker <code>{rule.actions[0].value[0]}</code></p></details>}
+    {errorLine}
+  </div>;
+}
+
 export function App() {
   const [auras,setAuras] = useState<Aura[]>([]);
   const [auraId,setAuraId] = useState(new URLSearchParams(location.search).get('aura') || '');
@@ -111,7 +174,7 @@ export function App() {
   const [synced,setSynced] = useState<Date | null>(null);
   const listGeneration = useRef(0), messageGeneration = useRef(0);
   const aura = auras.find(a => a.id === auraId);
-  const liveAddress = aura?.addresses.find(a => a.status === 'active' && a.domain_status === 'active')?.address;
+  const liveAddress = aura?.addresses.find(isReceiving)?.address;
   const inboxPath = useMemo(() => `/api/auras/${auraId}/inbox?limit=25&q=${encodeURIComponent(query)}${status ? `&status=${status}` : ''}`,[auraId,query,status]);
   const messagePath = `/api/auras/${auraId}/threads/${threadId}/messages?limit=25`;
 
@@ -185,6 +248,11 @@ export function App() {
     return () => { ++messageGeneration.current; controller.abort(); clearInterval(interval); document.removeEventListener('visibilitychange',load); };
   },[auraId,threadId,refreshKey]);
 
+  // The next poll confirms this. Until then the card shows what the server just returned.
+  const showAddress = useCallback((id: string, a: AddressDetail) => {
+    const address = { address: a.address, status: a.status, domain_status: a.domain_status, provisioning_status: a.provisioning.status };
+    setAuras(list => list.map(row => row.id === id ? { ...row, addresses: [address] } : row));
+  },[]);
   const moreThreads = useCallback(async () => {
     const generation = listGeneration.current; setMoreBusy(true);
     try {
@@ -208,9 +276,9 @@ export function App() {
     <aside className="sidebar">
       <a href="/" className="brand">34Five<small>Aura inbox</small></a>
       <div className="section-label">Aura inboxes</div>
-      <nav className="aura-nav" aria-label="Aura inboxes">{auras.map((a,index) => <button key={a.id} className={`aura-button ${a.id === auraId ? 'active' : ''}`} onClick={() => { setAuraId(a.id); setThreadId(''); setSearch(''); setStatus(''); }} aria-current={a.id === auraId ? 'page' : undefined}>
-        <span className={`aura-avatar tone-${index%3}`}>{initials(a.name.replace(' Aura',''))}</span><span className="aura-label"><strong>{a.name.replace(/ Aura$/,'')}</strong><small>{a.addresses.find(x => x.domain_status === 'active')?.address || 'No receiving address'}</small></span><span className="aura-count">{a.thread_count}</span>
-      </button>)}</nav>
+      <nav className="aura-nav" aria-label="Aura inboxes">{auras.map((a,index) => <div key={a.id} className="aura-card"><button className={`aura-button ${a.id === auraId ? 'active' : ''}`} onClick={() => { setAuraId(a.id); setThreadId(''); setSearch(''); setStatus(''); }} aria-current={a.id === auraId ? 'page' : undefined}>
+        <span className={`aura-avatar tone-${index%3}`}>{initials(a.name.replace(' Aura',''))}</span><span className="aura-label"><strong>{a.name.replace(/ Aura$/,'')}</strong></span><span className="aura-count">{a.thread_count}</span>
+      </button><AddressPanel aura={a} onAddress={showAddress}/></div>)}</nav>
       <div className="test-note"><strong>Test workspace</strong> Public access. Use test messages only.</div>
     </aside>
     <main className="main">
