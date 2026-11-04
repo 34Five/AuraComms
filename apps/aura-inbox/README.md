@@ -101,6 +101,16 @@ node scripts/provision-addresses.mjs --remote
 
 This command checks existing ownership before adding the real addresses and active assignments. It preserves placeholder addresses and seeded message history. Reruns are idempotent. Conflicts stop the command. The SQL file is provisioning data, not a schema migration.
 
+The demo environment is a separate Worker, `aura-inbox-demo`, with `AUTO_REPLY_MODE` set to `llm`, no Durable Object, and the same D1 and R2. The default config stays in fixed mode. Set its key and deploy it with:
+
+```sh
+node scripts/provision-merlin.mjs --remote
+npx wrangler secret put GEMINI_API_KEY --env demo
+npm run build && npx wrangler deploy --env demo
+```
+
+`provision-merlin.mjs` adds the Merlin Aura and `merlin@34five.studio` without touching rows outside Merlin's own, and stops on any conflict. Merlin appears in the API of every Worker bound to this D1. Route `merlin@34five.studio` to `aura-inbox-demo`, and do not repoint the existing addresses.
+
 Create the two literal `to` routing rules with `wrangler email routing rules create`, action `worker:aura-inbox-test`. List existing rules before changes and verify them afterward. Do not replace the domain catch-all or repoint the spike Worker.
 
 To verify externally, send a test email to each alias. Confirm the message appears only in its Aura's inbox within five seconds. Reply from the external sender to the same alias to verify thread grouping. Local integration tests cover MIME storage and routing, but cannot establish external provider delivery.

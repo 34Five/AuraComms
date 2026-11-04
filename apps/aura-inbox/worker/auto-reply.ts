@@ -5,7 +5,7 @@ import { LlmError, failureClass, safeDetail } from './llm/http.ts';
 import { auraConfig, buildReplyPrompt, finalizeReply, loadThread } from './llm/prompt.ts';
 import { createProvider, resolveModel, type ModelRef } from './llm/provider.ts';
 
-const ADDRESSES = new Set(['support-test@34five.studio', 'sales-test@34five.studio']);
+const ADDRESSES = new Set(['support-test@34five.studio', 'sales-test@34five.studio', 'merlin@34five.studio']);
 const SAMPLE = '34Five Aura email demo attachment.\nThis is a sample file for testing only.\n';
 const encoder = new TextEncoder();
 type Context = { org_id: string; aura_id: string; address_id: string; assignment_id: string; message_id: string; thread_id: string };

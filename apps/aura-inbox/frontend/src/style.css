@@ -291,6 +291,7 @@ button:focus-visible, a:focus-visible, select:focus-visible, summary:focus-visib
 }
 .status-tag.closed { background: var(--badge-clay-bg); color: var(--badge-clay-ink); }
 .status-tag.archived { background: var(--badge-slate-bg); color: var(--badge-slate-ink); }
+.status-tag.failed { background: var(--badge-red-bg); color: var(--badge-red-ink); }
 
 .sync-line { display: flex; flex-wrap: wrap; align-items: center; gap: 2px var(--space-2); flex-shrink: 0; white-space: nowrap; padding: var(--space-2) var(--space-4); border-top: 1px solid var(--rule); color: var(--ink-muted); font-size: var(--text-xs); }
 .sync-line > span:last-child { margin-left: auto; }

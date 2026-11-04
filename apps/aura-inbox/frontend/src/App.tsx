@@ -11,7 +11,7 @@ type AddressDetail = { address: string; status: string; domain_status: string;
     rule: { matchers: { value: string }[]; actions: { value: string[] }[] } | null } };
 type ProposedAddress = { id: string; domain: string; address: string };
 type Thread = { id: string; subject: string | null; sender: string | null; preview: string | null;
-  last_activity_at: string; message_count: number; inbox_status: string };
+  last_activity_at: string; message_count: number; inbox_status: string; reply_failed: number };
 type Message = { id: string; direction: string; status: string; from_address: string; from_name: string | null;
   subject: string | null; body_text: string | null; body_html: string | null; body_storage: string; activity_at: string;
   recipients: { kind: string; address: string; display_name: string | null }[];
@@ -293,7 +293,7 @@ export function App() {
           <div className="thread-list">{error && <div className="error-box" role="alert">{error}<button onClick={() => setRefreshKey(n => n+1)}>Try again</button></div>}
             {loading && <div className="list-empty">Loading conversations…</div>}
             {!loading && !error && threads.length === 0 && <div className="list-empty"><Icon name="inbox" size={28}/><strong>{query || status ? 'No matching conversations' : 'No mail yet'}</strong><p>{query || status ? 'Try another search or status.' : 'Incoming messages for this Aura will appear here.'}</p></div>}
-            {threads.map(t => <button key={t.id} className={`thread-item ${t.id === threadId ? 'selected' : ''}`} onClick={() => setThreadId(t.id)}><div className="thread-top"><strong>{t.sender || aura?.name || 'Conversation'}</strong>{t.message_count > 1 && <span className="thread-count">{t.message_count}<span className="sr-only"> messages</span></span>}<time dateTime={t.last_activity_at}>{date(t.last_activity_at)}</time></div><h3>{t.subject || '(No subject)'}</h3><div className="thread-bottom"><p>{t.preview || 'Open to view this conversation.'}</p>{t.inbox_status !== 'open' && <span className={`status-tag ${t.inbox_status}`}>{t.inbox_status}</span>}</div></button>)}
+            {threads.map(t => <button key={t.id} className={`thread-item ${t.id === threadId ? 'selected' : ''}`} onClick={() => setThreadId(t.id)}><div className="thread-top"><strong>{t.sender || aura?.name || 'Conversation'}</strong>{t.message_count > 1 && <span className="thread-count">{t.message_count}<span className="sr-only"> messages</span></span>}<time dateTime={t.last_activity_at}>{date(t.last_activity_at)}</time></div><h3>{t.subject || '(No subject)'}</h3><div className="thread-bottom"><p>{t.preview || 'Open to view this conversation.'}</p>{t.reply_failed === 1 && <span className="status-tag failed">Reply failed</span>}{t.inbox_status !== 'open' && <span className={`status-tag ${t.inbox_status}`}>{t.inbox_status}</span>}</div></button>)}
             {threadCursor && <button className="load-more" disabled={moreBusy} onClick={moreThreads}>{moreBusy ? 'Loading…' : 'Load more conversations'}</button>}
           </div><div className="sync-line"><span className={`live-dot ${error ? 'offline' : ''}`}/>{error ? 'Connection needs attention' : synced ? `Updated ${synced.toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'})}` : 'Connecting…'}<span>Refreshes every 5 seconds</span></div>
         </section>
