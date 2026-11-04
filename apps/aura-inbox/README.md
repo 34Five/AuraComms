@@ -1,10 +1,10 @@
 # Aura inbox test
 
-A read-only inbox for each Aura, with real incoming email. One Cloudflare Worker serves the React/Vite UI and `/api` endpoints. The only writes are generating an address for an Aura and retrying its provisioning.
+A read-only inbox for each Aura, with real incoming email. One Cloudflare Worker serves the React/Vite UI and `/api` endpoints. Inbox data is read-only. The only writes are sign-in, generating an address for an Aura, and retrying its provisioning.
 
-This is a public test deployment with no login. `DEMO_ORG_ID` limits all queries and inbound routing to `org_demo_001`. It is not authentication. Use test messages only. Add authentication and member/Aura authorization before using customer data.
+On the demo Worker, only invited people can see inbox data, and they sign in with a code sent by email (see [Sign-in](#sign-in)). This is temporary, until Access or Studio login replaces it. Every invited person sees every Aura: `DEMO_ORG_ID` limits all queries and inbound routing to `org_demo_001`, and there is no member or Aura authorization. Use test messages only, and add that authorization before using customer data.
 
-Deployed at https://aura-inbox-test.cassius-kellogg.workers.dev. The API uses the same origin under `/api`.
+**The older `aura-inbox-test` Worker has no login.** It runs code deployed before sign-in, at https://aura-inbox-test.cassius-kellogg.workers.dev, on the same D1 and R2. Anyone with that URL can read the same demo mail until its workers.dev route is turned off (see the runbook). The API uses the same origin under `/api`.
 
 ## Run locally
 
@@ -16,13 +16,16 @@ npm ci
 npm run check
 ```
 
-Start the Worker with `npm run dev:worker` and Vite in a second terminal with `npm run dev`. Vite proxies `/api` to port 8788. Local D1 and R2 are separate from Cloudflare.
+Start the Worker with `npm run dev:worker` and Vite in a second terminal with `npm run dev`. Vite proxies `/api` to port 8788. Local D1 and R2 are separate from Cloudflare. To sign in locally, set a non-empty `SESSION_SECRET` in `.dev.vars`, apply `scripts/0004_demo_auth.sql` and `scripts/provision-invites.sql` to the local database, and read the code from the text file named in the Worker's `send_email` log line. Use Chrome or Firefox: Safari refuses the `Secure` cookie on `http://127.0.0.1`.
 
 The Worker expects the existing email schema. For a fresh local database, import the parent fixture, migration, and seed from the repository with `wrangler d1 execute DB --local --file PATH`. The supplied repository seed uses organization `e07_demo_org`. Override `DEMO_ORG_ID` locally to view that seed. The remote database uses Prajwal's `org_demo_001` seed. Do not import the local seed or parent fixture remotely.
 
 ## Endpoints
 
+Every `/api` route needs a signed-in session except `/api/health` and `/api/auth/*`. Static files, including the app bundle, are public and hold no data.
+
 - `GET /api/health`: database connectivity and test mode.
+- `POST /api/auth/request`, `POST /api/auth/verify`, `POST /api/auth/signout`, `GET /api/auth/me`: see [Sign-in](#sign-in).
 - `GET /api/auras`: names, assigned addresses, and record counts.
 - `GET /api/auras/:auraId/inbox`: threads with sender, preview, and message count. Supports `limit` (1–50), `cursor`, `q` (subject/sender), and `status` (`open`, `closed`, `archived`).
 - `GET /api/auras/:auraId/threads/:threadId/messages`: chronological messages, recipients, and attachment metadata. Supports `limit` and `cursor` for earlier messages. Bcc is omitted.
@@ -32,6 +35,36 @@ The Worker expects the existing email schema. For a fresh local database, import
 The UI refreshes every five seconds while visible. It preserves older loaded pages. Quoted `>` history and its reply attribution collapse behind “Show quoted text.” Inline answers between quote blocks stay visible. HTML-only blockquotes and Gmail quote containers also collapse. Expanding a quote preserves its content and stays open across automatic refreshes.
 
 Email HTML becomes text. Scripts, remote images, and interactive email content do not run.
+
+## Sign-in
+
+Only addresses in `demo_auth_invites` can sign in. Anyone else sees "This address hasn't been invited."
+
+| Endpoint | What it does |
+|---|---|
+| `POST /api/auth/request` `{email}` | Sends a 6-digit code from `no-reply@34five.studio` |
+| `POST /api/auth/verify` `{email,code}` | Sets the session cookie |
+| `POST /api/auth/signout` | Revokes the session on the server and clears the cookie |
+| `GET /api/auth/me` | `{email}`, or 401 |
+
+A code lasts 10 minutes and works once, and only the newest one works. Three requests per email per 10 minutes are allowed. Five wrong codes lock that email for 15 minutes. The count clears only on a successful sign-in or when a lock ends, so old typos still count. Anyone who knows an invited address can trigger that lock, use up its code requests, or replace its newest code. Sessions last 7 days. Each code request clears that email's finished codes, and each sign-in clears expired and revoked sessions.
+
+`SESSION_SECRET` signs cookies and keys the stored code hashes. Without it, every `/api` route except `/api/health` returns 503. Rotating it invalidates pending codes and all sessions, so everyone signs in again. Inbound mail never depends on it.
+
+To invite someone, add a line to `scripts/provision-invites.sql` and apply it, or insert the lower-case address directly. To remove someone, delete their row, which also ends their sessions at once:
+
+```sh
+npx wrangler d1 execute DB --remote --file scripts/provision-invites.sql
+npx wrangler d1 execute DB --remote --command "DELETE FROM demo_auth_invites WHERE email='person@example.com'"
+```
+
+The migration only adds tables. Earlier deployed code ignores them. Apply it before deploying, or sign-in returns 500:
+
+```sh
+npx wrangler d1 execute DB --remote --file ../../scripts/0004_demo_auth.sql
+```
+
+Every Worker running this code needs its own `SESSION_SECRET`. The default `aura-inbox-test` Worker's API returns 503 without one if it is ever deployed from here.
 
 ## Incoming mail
 
@@ -126,7 +159,7 @@ An Aura with no address shows **Generate email** on its card. The button propose
 | `POST /api/auras/:id/address` | Creates the address. With several active domains, send `domain_id`. With none, returns 409 |
 | `POST /api/auras/:id/address/provision` | Retries the routing rule |
 
-POST requests must be JSON, which stops other sites posting from a browser. There is still no login, so anyone with the link can generate an address for any Aura in the demo org and create its routing rule. Each Aura gets one address, routed only to the demo Worker.
+POST requests must be JSON, which stops other sites posting from a browser. Any invited person can generate an address for any Aura in the demo org and create its routing rule. Each Aura gets one address, routed only to the demo Worker.
 
 Provisioning state lives in `email_address_provisioning`:
 
@@ -166,10 +199,19 @@ npx wrangler d1 execute DB --remote --file scripts/provision-atlas.sql
 npx wrangler d1 execute DB --remote --command "SELECT id,org_id,name FROM auras WHERE id='aura_demo_atlas'"
 ```
 
-**3. Deploy the demo Worker.** It is served only at https://inbox-demo.34five.studio (a custom domain on the zone; the workers.dev URL is off). Before the first visit, protect that hostname in Zero Trust: Access → Applications → Add → Self-hosted, domain `inbox-demo.34five.studio`, policy Allow with emails ending in `@34five.ai` and `@axiatechnologies.ai`, login method One-time PIN. Inbound mail is unaffected: Email Routing hands mail to the Worker directly.
+**3. Set up sign-in, then deploy the demo Worker.** It is served only at https://inbox-demo.34five.studio (a custom domain on the zone; the workers.dev URL is off). Do the first three commands before deploying, or the API returns 503 or 500. Add the people to invite to `scripts/provision-invites.sql` first. Inbound mail is unaffected: Email Routing hands mail to the Worker directly.
 
 ```sh
+npx wrangler d1 execute DB --remote --file ../../scripts/0004_demo_auth.sql
+npx wrangler d1 execute DB --remote --file scripts/provision-invites.sql
+openssl rand -hex 32 | npx wrangler secret put SESSION_SECRET --env demo
 npm run build && npx wrangler deploy --env demo
+```
+
+**Turn off public access to the old Worker.** In the dashboard, open Workers → `aura-inbox-test` → Settings → Domains & Routes and disable the workers.dev route. Without this, the demo mail stays readable there with no login. Then check that this returns no data:
+
+```sh
+curl -i https://aura-inbox-test.cassius-kellogg.workers.dev/api/auras
 ```
 
 **4. Set the secrets, if the token is ready.** Each command prompts for the value. The zone ID for `34five.studio` is `1c60311626bbfe94b6fe3496d15de727`. Skip this step to demo the pending state.
@@ -179,7 +221,7 @@ npx wrangler secret put CF_API_TOKEN --env demo
 npx wrangler secret put CF_ZONE_ID --env demo
 ```
 
-**5. Generate the address.** If the chip shows Failed with 'Already routed by another Cloudflare rule', pick a different Aura; do not change the existing rule. Open the demo URL. On Atlas's card, choose **Generate email**, check that it proposes `atlas@34five.studio`, then choose **Create address**.
+**5. Generate the address.** If the chip shows Failed with 'Already routed by another Cloudflare rule', pick a different Aura; do not change the existing rule. Open the demo URL and sign in with an invited address. On Atlas's card, choose **Generate email**, check that it proposes `atlas@34five.studio`, then choose **Create address**.
 
 - With the secrets, the chip shows **Active** and the rule exists. Skip step 6.
 - Without them, the chip shows **Provisioning pending** with the rule to create.

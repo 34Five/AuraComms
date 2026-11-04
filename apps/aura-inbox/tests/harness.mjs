@@ -1,7 +1,9 @@
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import worker from '../worker/index.ts';
+import { createSession } from '../worker/auth.ts';
 
+const TESTER = 'tester@example.invalid';
 export const ORG = 'e07_demo_org';
 export const SALES = 'e07_demo_aura_sales', SUPPORT = 'e07_demo_aura_support';
 
@@ -9,7 +11,7 @@ export function setup(t) {
   const sql = new DatabaseSync(':memory:');
   t.after(() => sql.close());
   sql.exec('PRAGMA foreign_keys=ON;');
-  for (const path of ['tests/email/fixtures/studio_parents_2026_10_22.sql','scripts/0001_email_model.sql','scripts/email/seed.sql','scripts/0003_email_address_provisioning.sql']) {
+  for (const path of ['tests/email/fixtures/studio_parents_2026_10_22.sql','scripts/0001_email_model.sql','scripts/email/seed.sql','scripts/0003_email_address_provisioning.sql','scripts/0004_demo_auth.sql']) {
     sql.exec(readFileSync(new URL('../../../'+path,import.meta.url),'utf8'));
   }
   sql.exec("INSERT INTO auras (id,org_id,name) VALUES ('other_aura','other_org','Other organization');");
@@ -21,8 +23,14 @@ export function setup(t) {
   });
   const objects = new Map();
   let batches = Promise.resolve();
+  const sent = [];
   const env = {
-    DEMO_ORG_ID: ORG, TEST_MODE:'true',
+    DEMO_ORG_ID: ORG, TEST_MODE:'true', SESSION_SECRET:'test-session-secret',
+    EMAIL: { async send(message) {
+      if (x.failSend) throw Object.assign(new Error(`Rejected ${message.to}`),{ code:'E_RECIPIENT_NOT_ALLOWED' });
+      sent.push(message);
+      return { messageId:`<login-${sent.length}@cloudflare.example>` };
+    } },
     // D1 runs each batch as one transaction, so concurrent batches take turns here too.
     DB: { prepare, batch(statements) {
       const run = batches.then(async () => {
@@ -40,7 +48,16 @@ export function setup(t) {
     },
     ASSETS:{ async fetch(){ return new Response('app'); } },
   };
-  return { env,sql,objects, async request(path,options) { return worker.fetch(new Request('https://inbox.example'+path,options),env); } };
+  const anon = (path,options) => worker.fetch(new Request('https://inbox.example'+path,options),env);
+  sql.exec(`INSERT INTO demo_auth_invites (email,invited_by,invited_at) VALUES ('${TESTER}','test','2026-11-04T00:00:00.000Z')`);
+  let cookie;
+  const x = { env,sql,objects,sent,failSend:false,anon, async request(path,options={}) {
+    cookie ??= (await createSession(env,TESTER)).split(';')[0];
+    const headers = new Headers(options.headers);
+    headers.set('cookie',cookie);
+    return anon(path,{ ...options,headers });
+  } };
+  return x;
 }
 
 export function email(to='sales@demo.34five.studio',id='new@example.invalid',extra='',body='A new test message.') {

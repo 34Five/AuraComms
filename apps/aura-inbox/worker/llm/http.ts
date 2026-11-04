@@ -13,7 +13,7 @@ export class LlmError extends Error {
 
 export type FailureClass = 'provider_error' | 'timeout' | 'safety_block' | 'empty_reply' | 'bad_config' | 'internal_error';
 
-// The inbox has no login. These phrases are public, and raw provider detail stays in email_events.
+// These phrases reach everyone who can open the inbox, and raw provider detail stays in email_events.
 export const FAILURE_SUMMARIES: Record<FailureClass, string> = {
   provider_error: 'The AI provider returned an error.',
   timeout: 'The AI provider did not respond in time.',

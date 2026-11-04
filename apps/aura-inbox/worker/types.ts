@@ -2,6 +2,8 @@ export interface Env {
   DB: D1Database;
   MAIL: R2Bucket;
   ASSETS: Fetcher;
+  EMAIL: SendEmail;
+  SESSION_SECRET?: string;
   DEMO_ORG_ID: string;
   TEST_MODE: string;
   AUTO_REPLY_ENABLED?: string;
