@@ -46,7 +46,7 @@ The existing `spike-test` and `anthony` routes and catch-all remain unchanged.
 
 `AUTO_REPLY_ENABLED=true` enables a fixed demo response for both real test addresses. The reply uses the receiving Aura's name and address. It preserves the conversation subject and uses Cloudflare's native reply API for sender validation and threading. Mention `attachment` or include an attachment to receive `aura-demo.txt`. Uploaded files are not echoed back.
 
-`AUTO_REPLY_MODE` chooses the reply text. `fixed` (the default) sends the fixed demo response. `llm` generates the reply as described below. Any other value behaves as `fixed`.
+`AUTO_REPLY_MODE` chooses the reply text and which addresses reply. `fixed` (the default) sends the fixed demo response from the two test addresses only. `llm` generates the reply as described below, from any active address on an active domain with an open assignment, including addresses made with **Generate email**. It never answers mail from an address in `email_addresses`, in any status. Any other value behaves as `fixed`.
 
 Outgoing replies, recipients, and sample attachments are saved in the same Aura conversation. A reply is marked `sent` only after provider acceptance. Recipient delivery remains `accepted`, not `delivered`. The existing seeded messages are not answered retroactively.
 
@@ -100,6 +100,16 @@ node scripts/provision-addresses.mjs --remote
 ```
 
 This command checks existing ownership before adding the real addresses and active assignments. It preserves placeholder addresses and seeded message history. Reruns are idempotent. Conflicts stop the command. The SQL file is provisioning data, not a schema migration.
+
+The demo environment is a separate Worker, `aura-inbox-demo`, with `AUTO_REPLY_MODE` set to `llm`, no Durable Object, and the same D1 and R2. The default config stays in fixed mode. Set its key and deploy it with:
+
+```sh
+node scripts/provision-merlin.mjs --remote
+npx wrangler secret put GEMINI_API_KEY --env demo
+npm run build && npx wrangler deploy --env demo
+```
+
+`provision-merlin.mjs` adds the Merlin Aura and `merlin@34five.studio` without touching rows outside Merlin's own, and stops on any conflict. Merlin appears in the API of every Worker bound to this D1. Route `merlin@34five.studio` to `aura-inbox-demo`, and do not repoint the existing addresses.
 
 Create the two literal `to` routing rules with `wrangler email routing rules create`, action `worker:aura-inbox-test`. List existing rules before changes and verify them afterward. Do not replace the domain catch-all or repoint the spike Worker.
 
@@ -184,7 +194,7 @@ npx wrangler email routing rules create 34five.studio --name "AuraComms anthony@
 
 The chip stays on **Provisioning pending** because the Worker cannot see this rule. Mail still flows. If the secrets are set later, **Retry** finds the rule and the chip shows **Active**.
 
-**7. Send a real test email to `anthony@34five.studio`.** It should appear in Anthony's inbox within five seconds, and a reply should come back from that address. This is the first real test of a reply from a generated address. If the thread shows **Reply failed**, report that as a finding: inbound mail still counts as working.
+**7. Send a real test email to `anthony@34five.studio`.** It should appear in Anthony's inbox within five seconds, and a reply should come back from that address. This needs the demo Worker in `llm` mode. Fixed mode does not reply from generated addresses. This is the first real test of a reply from a generated address. If the thread shows **Reply failed**, report that as a finding: inbound mail still counts as working.
 
 ## Verification on November 2, 2026
 

@@ -23,5 +23,21 @@
     "database_id": "d24ded08-d1cc-4fd1-9834-4185a3046a21"
   }],
   "r2_buckets": [{ "binding": "MAIL", "bucket_name": "aura-inbox-test-mail" }],
-  "observability": { "enabled": true, "head_sampling_rate": 1 }
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+  "env": {
+    "demo": {
+      "name": "aura-inbox-demo",
+      "vars": {
+        "DEMO_ORG_ID": "org_demo_001", "TEST_MODE": "true", "AUTO_REPLY_ENABLED": "true",
+        "AUTO_REPLY_MODE": "llm", "DEFAULT_LLM_MODEL": "gemini:gemini-3.5-flash-lite",
+        "LLM_SENDER_HOURLY_CAP": "10", "LLM_AURA_DAILY_CAP": "200"
+      },
+      "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["support-test@34five.studio", "sales-test@34five.studio", "merlin@34five.studio"] }],
+      "d1_databases": [{
+        "binding": "DB", "database_name": "development_replica",
+        "database_id": "d24ded08-d1cc-4fd1-9834-4185a3046a21"
+      }],
+      "r2_buckets": [{ "binding": "MAIL", "bucket_name": "aura-inbox-test-mail" }]
+    }
+  }
 }

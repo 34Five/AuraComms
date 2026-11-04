@@ -54,10 +54,14 @@ export async function autoReply(message: ForwardableEmailMessage, env: Env, pars
   const address = message.to.trim().toLowerCase();
   const log = (event: string, fields: Record<string, unknown> = {}) => console.log(JSON.stringify({ event, message_id: context.message_id, ...fields }));
   const skip = (reason: string) => log('inbox_auto_reply_skipped', { reason });
-  if (!ADDRESSES.has(address)) return skip('not_test_address');
+  const useLlm = env.AUTO_REPLY_MODE === 'llm';
+  // Fixed mode answers only the two test addresses. LLM mode answers any routed address: activeRoute below checks it in D1.
+  if (!useLlm && !ADDRESSES.has(address)) return skip('not_test_address');
   if (!/^[^\s<>@,;\x00-\x1f\x7f]+@[^\s<>@,;\x00-\x1f\x7f]+$/.test(message.from)) return skip('invalid_sender');
   const sender = message.from.toLowerCase();
   if (ADDRESSES.has(sender) || sender === 'spike-test@34five.studio' || /^(?:mailer-daemon|postmaster|no-?reply)@/i.test(sender)) return skip('automated_sender');
+  // Any address can reply in LLM mode, so any address we hold, in any status, must not be answered. This stops Aura-to-Aura loops.
+  if (useLlm && await env.DB.prepare('SELECT 1 FROM email_addresses WHERE address_key=?').bind(sender).first()) return skip('automated_sender');
   const values = (name: string) => {
     const found = parsed.headers.filter(h => h.key === name).map(h => h.value);
     return found.length ? found : [message.headers.get(name) ?? ''].filter(Boolean);
@@ -85,7 +89,6 @@ export async function autoReply(message: ForwardableEmailMessage, env: Env, pars
     .bind(context.org_id,context.aura_id,context.assignment_id,context.address_id,new Date().toISOString(),address).first<{ name: string }>();
   const active = await activeRoute();
   if (!active) return skip('assignment_no_longer_active');
-  const useLlm = env.AUTO_REPLY_MODE === 'llm';
   if (useLlm) {
     const reason = await llmCapReached(env,context,sender);
     if (reason) return log('inbox_llm_reply_skipped',{ reason });

@@ -96,7 +96,11 @@ export async function api(request: Request, env: Env): Promise<Response> {
     }
     const { results } = await env.DB.prepare(`SELECT t.id,t.subject,t.inbox_status,t.last_activity_at,
       (SELECT COUNT(*) FROM email_messages m WHERE m.org_id=t.org_id AND m.aura_id=t.aura_id AND m.thread_id=t.id) AS message_count,
-      (SELECT m.from_address FROM email_messages m WHERE m.org_id=t.org_id AND m.aura_id=t.aura_id AND m.thread_id=t.id ORDER BY m.activity_at DESC,m.id DESC LIMIT 1) AS sender,
+      COALESCE(
+        (SELECT m.from_address FROM email_messages m WHERE m.org_id=t.org_id AND m.aura_id=t.aura_id AND m.thread_id=t.id AND m.direction='in' ORDER BY m.activity_at DESC,m.id DESC LIMIT 1),
+        (SELECT r.address FROM email_messages m JOIN email_message_recipients r ON r.org_id=m.org_id AND r.aura_id=m.aura_id AND r.message_id=m.id
+          WHERE m.org_id=t.org_id AND m.aura_id=t.aura_id AND m.thread_id=t.id AND r.kind='to' ORDER BY m.activity_at DESC,m.id DESC,r.ordinal LIMIT 1)) AS sender,
+      COALESCE((SELECT m.status='failed' FROM email_messages m WHERE m.org_id=t.org_id AND m.aura_id=t.aura_id AND m.thread_id=t.id AND m.direction='out' ORDER BY m.activity_at DESC,m.id DESC LIMIT 1),0) AS reply_failed,
       (SELECT substr(m.body_text,1,160) FROM email_messages m WHERE m.org_id=t.org_id AND m.aura_id=t.aura_id AND m.thread_id=t.id ORDER BY m.activity_at DESC,m.id DESC LIMIT 1) AS preview
       FROM email_threads t WHERE ${filters.join(' AND ')} ORDER BY t.last_activity_at DESC,t.id DESC LIMIT ?`)
       .bind(...binds, limit + 1).all<Row>();
