@@ -1,6 +1,7 @@
 import { Governance } from './governance.ts';
 import { authorizeManagement, managementBody } from './management-auth.ts';
-import { domainRecords, verifyDomain } from './domain-dns.ts';
+import { DomainRegistry } from './domain-registry.ts';
+import { verifyDomain } from './domain-dns.ts';
 import { HttpError, type Env } from './types.ts';
 import { json, requireId } from './utils.ts';
 
@@ -71,8 +72,9 @@ export async function managementApi(request: Request, env: Env): Promise<Respons
     if (parts.length===6 && parts[4]==='addresses' && request.method==='PUT') {
       const address=requireId(parts[5]),data=await managementBody(request);
       if (!['active','disabled'].includes(data.status)) throw new HttpError(400,'Choose active or disabled.');
-      const current=await g.one(`SELECT a.id,a.status FROM email_addresses a JOIN email_address_assignments x ON x.org_id=a.org_id AND x.address_id=a.id
+      const current=await g.one(`SELECT a.id,a.status,d.status AS domain_status FROM email_addresses a JOIN email_domains d ON d.org_id=a.org_id AND d.id=a.domain_id JOIN email_address_assignments x ON x.org_id=a.org_id AND x.address_id=a.id
         WHERE x.org_id=? AND x.aura_id=? AND x.ended_at IS NULL AND a.id=?`,g.org,id,address);
+      if(data.status==='active' && current.domain_status!=='active')throw new HttpError(409,'Verify and activate the domain before enabling this address.');
       if (current.status==='released') throw new HttpError(409,'Released addresses cannot be reactivated.');
       const statements=[g.q('UPDATE email_addresses SET status=?,disabled_at=? WHERE org_id=? AND id=?',data.status,data.status==='disabled'?new Date().toISOString():null,g.org,address)];
       if (data.status==='disabled') statements.push(g.q("UPDATE email_reviews SET status='superseded' WHERE org_id=? AND aura_id=? AND status IN ('pending','approved') AND message_id IN (SELECT id FROM email_messages WHERE org_id=? AND aura_id=? AND email_address_id=? AND status IN ('draft','queued'))",g.org,id,g.org,id,address));
@@ -80,12 +82,22 @@ export async function managementApi(request: Request, env: Env): Promise<Respons
       return json({status:data.status});
     }
   }
-  if (resource==='domains' && parts.length===3 && request.method==='GET') {
-    const domains=await g.q('SELECT * FROM email_domains WHERE org_id=? ORDER BY domain',g.org).all<Record<string,any>>();
-    return json({domains:domains.results.map(d=>({id:d.id,domain:d.domain,status:d.status,records:domainRecords(d.domain_key,d.dns_records_json),
-      provider_domain_id:d.cloudflare_domain_id,provider_managed:!!d.cloudflare_zone_id,setup_url:'https://dash.cloudflare.com/'}))});
+  if (resource==='domains') {
+    const registry=new DomainRegistry(env);
+    if(parts.length===3 && request.method==='GET')return json({domains:await registry.list(new URL(request.url).searchParams.get('active')==='true')});
+    if(parts.length===3 && request.method==='POST') {
+      const data=await managementBody(request);
+      return json({domain:await registry.addCustom(data.domain)},201);
+    }
+    if(parts.length===4 && id==='default' && request.method==='POST') {
+      await managementBody(request);
+      return json({domain:await registry.ensureDefault(env.TENANT_COMPANY_NAME ?? env.DEMO_ORG_ID)});
+    }
+    if(id && parts.length===4 && request.method==='GET')return json({domain:await registry.view(await registry.get(id))});
+    if(id && parts.length===4 && request.method==='DELETE')return json({domain:await registry.remove(id)});
+    if(id && parts.length===5 && parts[4]==='check' && request.method==='POST')return json({domain:await registry.check(id)});
+    if(id && parts.length===5 && parts[4]==='verify' && request.method==='POST')return json(await verifyDomain(env,id));
   }
-  if (resource==='domains' && id && parts.length===5 && parts[4]==='verify' && request.method==='POST') return json(await verifyDomain(env,id));
   throw new HttpError(404,'Management endpoint not found.');
 }
 function validName(value: unknown): string {

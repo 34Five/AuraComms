@@ -28,9 +28,9 @@ export function domainRecords(domain: string, value: string): RecordRow[] {
     && (r.name.toLowerCase()===domain || r.name.toLowerCase().endsWith('.'+domain)))
     .map((r: any)=>({type:r.type,name:r.name.toLowerCase(),content:r.content ?? r.value,...(r.priority!==undefined?{priority:r.priority}:{}),...(r.ttl!==undefined?{ttl:r.ttl}:{})}));
 }
-export async function verifyDomain(env: Env, id: string, resolver: typeof fetch = fetch) {
+export async function verifyDomain(env: Env, id: string, resolver: typeof fetch = fetch, suppliedRecords?: RecordRow[]) {
   const g = new Governance(env), d = await g.one('SELECT * FROM email_domains WHERE org_id=? AND id=?',g.org,id);
-  const expected = domainRecords(d.domain_key,d.dns_records_json);
+  const expected = domainRecords(d.domain_key,JSON.stringify(suppliedRecords ?? JSON.parse(d.dns_records_json)));
   if (!expected.length) throw new HttpError(409,'Provider DNS records have not been loaded for this domain. Open Cloudflare setup first.');
   const unique = [...new Map(expected.map(r=>[r.type+':'+r.name,r])).values()];
   const answers = new Map<string,{state:string;answers:any[]}>();

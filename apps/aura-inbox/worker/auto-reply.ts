@@ -91,8 +91,8 @@ export async function autoReply(message: ForwardableEmailMessage, env: Env, pars
   const claim = await env.DB.prepare(`INSERT INTO email_messages
     (id,org_id,aura_id,thread_id,email_address_id,address_assignment_id,direction,status,send_idempotency_key,
     envelope_from,envelope_to,from_address,from_name,subject,body_storage,body_text,body_size_bytes,in_reply_to,references_json,activity_at,created_at)
-    VALUES (?,?,?,?,?,?,'out','draft',?,?,?,?,?,?,'inline',?,?,?,?,?,?) ON CONFLICT DO NOTHING`)
-    .bind(id,context.org_id,context.aura_id,context.thread_id,context.address_id,context.assignment_id,sendKey,
+    VALUES (?,?,?,?,?,?,'out',?,?,?,?,?,?,?,'inline',?,?,?,?,?,?) ON CONFLICT DO NOTHING`)
+    .bind(id,context.org_id,context.aura_id,context.thread_id,context.address_id,context.assignment_id,useLlm?'sending':'draft',sendKey,
       address,message.from,address,active.name,replySubject,text,encoder.encode(text ?? '').byteLength,parentId,JSON.stringify(chain),now,now).run();
   if (!claim.meta.changes) return skip('duplicate_reply_claim');
   try {
@@ -130,7 +130,7 @@ export async function autoReply(message: ForwardableEmailMessage, env: Env, pars
       const reply = await provider.generateReply(buildReplyPrompt(aura,thread,{ attachmentCount }));
       text = finalizeReply(reply.text,{ truncated:reply.truncated });
       if (!text) throw new LlmError('E_LLM_EMPTY','The reply was empty after cleanup.');
-      await env.DB.prepare('UPDATE email_messages SET body_text=?,body_size_bytes=? WHERE org_id=? AND aura_id=? AND id=?')
+      await env.DB.prepare("UPDATE email_messages SET status='draft',body_text=?,body_size_bytes=? WHERE org_id=? AND aura_id=? AND id=?")
         .bind(text,encoder.encode(text).byteLength,context.org_id,context.aura_id,id).run();
     } catch (error) {
       const secrets = [env.GEMINI_API_KEY ?? '',env.ANTHROPIC_API_KEY ?? ''];

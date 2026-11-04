@@ -502,3 +502,17 @@ button:focus-visible, a:focus-visible, select:focus-visible, summary:focus-visib
 @media(max-width:1000px) { .configuration-grid,.dns-records { grid-template-columns:minmax(0,1fr); } .setup-steps { grid-template-columns:minmax(0,1fr); gap:var(--space-2); } }
 @media(max-width:850px) { .workspace-nav { flex-direction:row; flex-wrap:wrap; margin-top:var(--space-3); gap:var(--space-1); } .workspace-nav a { padding:6px 10px; } .management-content { overflow:visible; padding:var(--space-4); } .management-topbar { padding:var(--space-4); align-items:flex-start; } .management-sidebar .test-note { display:none; } .management-main { min-height:0; } .management-app { height:auto; min-height:100dvh; } }
 @media(max-width:560px) { .aura-directory { grid-template-columns:minmax(0,1fr); } .directory-heading,.configuration-title { align-items:flex-start; flex-wrap:wrap; } .management-topbar { flex-wrap:wrap; } .management-content { padding:var(--space-3); } }
+
+.domain-add-form { margin-bottom: 24px; }
+.domain-add-form input { max-width: 520px; }
+.delegation-instructions { margin: 24px 0; padding: 20px; border: 1px solid var(--border, #d9e0e9); border-radius: 12px; }
+.nameserver-row { display: flex; align-items: end; gap: 12px; margin-top: 12px; }
+.nameserver-row label { flex: 1; min-width: 0; }
+.nameserver-row button { flex-shrink: 0; }
+.domain-auth-summary { display: flex; flex-wrap: wrap; gap: 12px; margin: 20px 0; color: #176044; }
+.domain-auth-summary span { padding: 8px 12px; border-radius: 8px; background: #edf8f2; }
+.domain-dns-details { margin-top: 20px; }
+.domain-dns-details summary { cursor: pointer; font-weight: 600; padding: 12px 0; }
+.domain-remove { border-top: 1px solid var(--border, #d9e0e9); margin-top: 24px; padding-top: 12px; }
+.domain-card h2 { overflow-wrap: anywhere; }
+@media (max-width: 600px) { .nameserver-row { align-items: stretch; flex-direction: column; } .nameserver-row button { align-self: start; } }

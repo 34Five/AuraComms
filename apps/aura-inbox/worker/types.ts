@@ -1,5 +1,10 @@
 export interface Env {
   DB: D1Database;
+  CLOUDFLARE_DOMAIN_API_TOKEN?: string;
+  CLOUDFLARE_ACCOUNT_ID?: string;
+  DEFAULT_EMAIL_DOMAIN?: string;
+  DEFAULT_EMAIL_ZONE_ID?: string;
+  TENANT_COMPANY_NAME?: string;
   GOVERNANCE: DurableObjectNamespace;
   EMAIL?: SendEmail;
   GOVERNANCE_ADMIN_TOKEN?: string;

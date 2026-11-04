@@ -617,7 +617,7 @@ test('a failure that cannot be recorded logs a distinct event and sends nothing'
   await receive(demo.message(), x.env);
   assert.equal(demo.replies.length, 0);
   const row = x.sql.prepare("SELECT id,status FROM email_messages WHERE org_id='org_demo_001' AND direction='out'").get();
-  assert.equal(row.status, 'draft');
+  assert.equal(row.status, 'sending');
   assert.ok(logs.mock.calls.map(call => String(call.arguments[0])).some(line => line.includes('inbox_llm_failure_record_failed') && line.includes(row.id)));
 });
 
@@ -772,4 +772,16 @@ test('the inbox distinguishes failed, generating, and ordinary messages', () => 
   assert.equal(messageState({ ...out, status: 'sent', body_text: 'Hello' }), 'normal');
   assert.equal(messageState({ ...out, status: 'sending', display_state: 'timed_out' }), 'timed_out');
   assert.equal(messageState({ ...out, direction: 'in', status: 'received' }), 'normal');
+});
+
+
+test('generated Tier 1 replies remain drafts for governance review after the branch integration',async t=>{
+  const x=setup(t),demo=llmMode(x);
+  x.sql.exec("UPDATE email_aura_policies SET tier='1' WHERE org_id='org_demo_001' AND aura_id='aura_demo_002'");
+  mockFetch(t,()=>respond(gemini('A generated reply for review.')));
+  await receive(demo.message(),x.env);
+  assert.equal(demo.replies.length,0);
+  const row=x.sql.prepare("SELECT * FROM email_messages WHERE org_id='org_demo_001' AND direction='out'").get();
+  assert.equal(row.status,'draft');assert.equal(row.body_text,'A generated reply for review.');
+  assert.equal(x.sql.prepare('SELECT status FROM email_reviews WHERE message_id=?').get(row.id).status,'pending');
 });

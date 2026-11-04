@@ -179,3 +179,72 @@ These changes use the existing migrated tables. No new D1 schema migration is re
 ### Management verification
 
 The deployed desktop and mobile pages pass isolated browser checks. The checks select an Aura on the standalone governance page and create, rename and delete a temporary Aura. The final demo contains the same four Auras. Live DNS verification confirms DKIM, SPF, bounce MX and DMARC records for `34five.studio`. The verifier compares required authentication tags and accepts valid additional reporting tags. No DNS records or external email messages are changed by verification.
+
+## Company email domains (AXI-12 / AXI-21)
+
+`/email-settings` now provides the tenant domain registry and custom-domain setup flow. It lists the default company subdomain and custom domains. Managers can add a domain, copy its nameservers, check delegation and email readiness, inspect public authentication records, and remove an unused custom domain. Removal disables the registry entry. It preserves addresses, assignments, mail, Cloudflare zones and DNS records.
+
+The existing `email_domains` and `email_addresses` schema is unchanged. Do not apply another migration for this feature.
+
+### Server configuration
+
+The Worker uses these variables:
+
+- `CLOUDFLARE_ACCOUNT_ID`: the account that owns the email zones.
+- `DEFAULT_EMAIL_DOMAIN`: `34five.studio`.
+- `DEFAULT_EMAIL_ZONE_ID`: the existing Cloudflare zone for that default domain.
+- `TENANT_COMPANY_NAME`: trusted company name for this demo workspace. The supplied value is `Axia`.
+- `CLOUDFLARE_DOMAIN_API_TOKEN`: a server secret. Set it with `wrangler secret put CLOUDFLARE_DOMAIN_API_TOKEN`. Never put it in frontend code or request bodies.
+
+Use a token with access to the required account/zones and Zone Read/Edit, Email Routing and Email Sending operations. Cloudflare also requires the account's Email Sending entitlement. A failed request shows its method, path, HTTP status and provider error codes. It does not expose provider error text or credentials. Confirm the exact permission needed from the failed operation before expanding a token.
+
+The existing management credential and server-selected workspace member protect all domain endpoints. Mutations require the same origin. The organization coordinator serializes them with the app's other management changes. Do not call the mutation service concurrently outside that coordinator.
+
+This is the existing fixed demo administrator model. It can adopt an exact existing zone in the configured Cloudflare account. Account ownership does not prove a customer's entitlement to that zone. Before a multi-tenant production rollout, require an operator-approved adoption list or tenant-specific ownership proof.
+
+### Registry interface
+
+`DomainRegistry` in `worker/domain-registry.ts` exposes:
+
+- `ensureDefault(companyName)`: reserve the tenant's default domain on the first address request, then attempt onboarding. The caller supplies a company name from trusted tenant data. The management screen also exposes an explicit setup action when no default exists.
+- `addCustom(domain)`: reserve a domain, create or reconcile its Cloudflare zone, and return nameservers.
+- `list(activeOnly)`, `get(id)` and `view(row)`: tenant-scoped domain and setup records. `list(true)` returns domains usable by the address-generation flow.
+- `check(id)`: reconcile delegation, sending identity, routing and public DNS. It activates the domain only after all required checks pass.
+- `remove(id)`: refuse default-domain removal and custom-domain removal with active addresses. Disable an unused custom domain while preserving history.
+
+Slugs use lowercase ASCII letters, digits and hyphens from the company name. Accents are normalized. A collision uses the company slug, normalized organization ID and a stable SHA-256 suffix, bounded to one 63-character DNS label. An empty company slug uses the organization fallback. Existing tenant subdomains do not change when a company is renamed. Domain reservation is atomic. Different tenants cannot reserve the same domain or overlapping parent/child custom domains. Removed domains remain reserved.
+
+HTTP endpoints are `GET/POST /api/manage/domains`, `POST /api/manage/domains/default`, `GET/DELETE /api/manage/domains/:id`, and `POST /api/manage/domains/:id/check`. The list accepts `?active=true`. The existing `POST /api/manage/domains/:id/verify` still checks public DNS without activating a domain. Request bodies cannot select a tenant, zone, provider ID or activation status.
+
+### Provider operations and manual steps
+
+The adapter uses the documented Cloudflare API:
+
+1. `GET /zones?name=...&account.id=...` and, when absent, `POST /zones` with a full zone in the configured account.
+2. `GET /zones/:zone` to reconcile delegation. The response must match the expected account, zone name and full-zone type.
+3. `GET/POST /zones/:zone/email/sending/subdomains` to reuse or create the exact sending identity.
+4. `GET /zones/:zone/email/sending/subdomains/:tag/dns` for provider-issued DKIM, SPF, DMARC and bounce MX values.
+5. `GET /zones/:zone/email/routing` and, for custom apex domains, `POST /zones/:zone/email/routing/dns` to enable routing through the Email Service API.
+6. Public DNS checks through the fixed Cloudflare DNS-over-HTTPS resolver.
+
+The customer must change nameservers at their registrar. The app cannot make that delegation. Preserve the domain's existing website and mail records in the new zone before delegation. The UI explains that DNS moves to 34Five's Cloudflare.
+
+Cloudflare documents a separate routing-subdomain onboarding flow. The available zone-level routing API does not establish that a particular subdomain is onboarded. The adapter does not change the parent zone's MX records. If a default subdomain has no public Cloudflare routing MX, it remains verifying. In Cloudflare, select the parent zone, open Email Service → Email Routing, and add the exact tenant subdomain. In Email Sending, choose Onboard Domain for that subdomain and complete its provider DNS setup. Select Check now afterward. Missing sending authentication also remains visible until Cloudflare onboarding installs the provider records. No fabricated DKIM records or manual DNS-writing endpoint is used.
+
+Cloudflare limits a zone to **30 domains across Email Routing and Email Sending, including the apex**. The default zone therefore has limited tenant capacity. Report capacity or entitlement failures before changing the default-domain design. Sources: [subdomain configuration](https://developers.cloudflare.com/email-service/configuration/subdomains/), [limits](https://developers.cloudflare.com/email-service/platform/limits/), [sending-domain creation](https://developers.cloudflare.com/api/resources/email_sending/subresources/subdomains/methods/create/) and [routing DNS enablement](https://developers.cloudflare.com/api/resources/email_routing/subresources/dns/methods/create/).
+
+### Address-generation handoff and verification boundary
+
+Akash's AXI-19 button can continue to read active `email_domains` rows using the existing columns. No prerequisite-check function is required for Thursday. When its default-domain bootstrap is connected, call `ensureDefault()` before querying active domains. AXI-19 owns choosing an address/local part and assigning it to an Aura. AXI-11 owns each address's Cloudflare routing rule.
+
+The current demo sender remains restricted to the four `TEST_ADDRESSES` and Wrangler's allowed sender list. Activating a domain does not lift that restriction or create an Aura email address. A real-domain end-to-end proof requires the address assignment and routing integration, an appropriate sender binding, actual delegation and an external mailbox test.
+
+Local tests use the real SQLite schema and foreign keys plus a mocked Cloudflare transport. They cover ownership, overlap races, slug collisions, retries, state transitions, incomplete authentication, provider failures, removal and address reactivation. They do not prove live account permissions, DNS propagation or delivery. No remote zone, DNS record or email message is changed by these tests.
+
+### Local verification on November 4, 2026
+
+- 184 app tests pass, including 14 domain tests and the governed LLM integration regression.
+- 79 schema/lifecycle/rules tests and 68 spike tests pass.
+- TypeScript, the Vite build and Wrangler deployment dry run pass.
+- Browser checks against disposable local D1 data cover management unlock, the nameserver display, domain creation, setup failures, retry and confirmed soft removal.
+- No deployment, remote D1 change, customer DNS delegation or external mail test was performed for this change.
