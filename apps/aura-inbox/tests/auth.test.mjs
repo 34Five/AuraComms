@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { setup } from './harness.mjs';
+import worker from '../worker/index.ts';
+import { enableReplies, setup } from './harness.mjs';
 
 const SENDER = 'no-reply@34five.studio';
 const config = JSON.parse(readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8'));
@@ -195,7 +196,7 @@ test('the correct code sets a hardened session cookie', async t => {
   const signedIn = await me(x, parts[0]);
   assert.equal(signedIn.status, 200);
   assert.deepEqual(await signedIn.json(), { email: INVITED });
-  assert.notEqual(x.sql.prepare('SELECT last_sign_in_at FROM demo_auth_invites').get().last_sign_in_at, null);
+  assert.notEqual(x.sql.prepare('SELECT last_sign_in_at FROM demo_auth_invites WHERE email=?').get(INVITED).last_sign_in_at, null);
 });
 
 test('me without a cookie is 401', async t => {
@@ -333,4 +334,103 @@ test('logs never hold the code or the full email', async t => {
   assert.ok(lines.length > 0);
   assert.ok(!logged.includes(code));
   assert.ok(!logged.includes(INVITED));
+});
+
+const provisionedTester = 'tester@example.invalid';
+
+test('anonymous API calls get 401', async t => {
+  const x = invited(t);
+  for (const [path, options] of [
+    ['/api/auras'], ['/api/auras/'], ['/api'], ['/api/auras/e07_demo_aura_sales/inbox'], ['/api/nope'],
+    ['/api/auras/e07_demo_aura_sales/address', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }],
+  ]) {
+    const response = await x.anon(path, options);
+    assert.equal(response.status, 401, path);
+    assert.deepEqual(await response.json(), { error: 'Sign in to continue.' });
+  }
+});
+
+test('a cookie that fails verification reaches no data route', async t => {
+  const x = invited(t);
+  const cookie = await signIn(x);
+  // The first signature character: every bit of it counts, unlike the last one's.
+  const [id, signature] = cookie.split('.');
+  const tampered = `${id}.${signature[0] === 'A' ? 'B' : 'A'}${signature.slice(1)}`;
+  assert.equal((await x.anon('/api/auras', { headers: { cookie: tampered } })).status, 401);
+});
+
+test('static assets stay public, with or without the secret', async t => {
+  const x = invited(t);
+  assert.equal(await (await x.anon('/')).text(), 'app');
+  delete x.env.SESSION_SECRET;
+  assert.equal(await (await x.anon('/')).text(), 'app');
+});
+
+test('health stays open, with or without the secret', async t => {
+  const x = invited(t);
+  assert.equal((await x.anon('/api/health')).status, 200);
+  assert.equal((await x.anon('/api/health/')).status, 200);
+  delete x.env.SESSION_SECRET;
+  assert.equal((await x.anon('/api/health')).status, 200);
+});
+
+test('a correct code opens /api/auras and sign-out closes it', async t => {
+  const x = invited(t);
+  const cookie = await signIn(x);
+  const auras = await x.anon('/api/auras', { headers: { cookie } });
+  assert.equal(auras.status, 200);
+  assert.ok((await auras.json()).auras.length > 0);
+  await post(x, '/api/auth/signout', {}, { cookie });
+  assert.equal((await x.anon('/api/auras', { headers: { cookie } })).status, 401);
+});
+
+for (const [label, change] of [['missing', env => { delete env.SESSION_SECRET; }], ['empty', env => { env.SESSION_SECRET = ''; }]]) {
+  test(`${label} SESSION_SECRET returns 503 on every API route but health`, async t => {
+    const x = invited(t);
+    const cookie = await signIn(x);
+    change(x.env);
+    for (const [path, options] of [
+      ['/api/auras', { headers: { cookie } }], ['/api/auth/me', { headers: { cookie } }], ['/api'],
+      ['/api/auth/request', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: INVITED }) }],
+    ]) {
+      const response = await x.anon(path, options);
+      assert.equal(response.status, 503, path);
+      assert.deepEqual(await response.json(), { error: 'Sign-in is unavailable right now.' });
+    }
+    assert.equal(x.sent.length, 1);
+  });
+}
+
+test('removing an invite locks out its live session', async t => {
+  const x = invited(t);
+  const cookie = await signIn(x);
+  assert.equal((await x.anon('/api/auras', { headers: { cookie } })).status, 200);
+  x.sql.prepare('DELETE FROM demo_auth_invites WHERE email=?').run(INVITED);
+  assert.equal((await x.anon('/api/auras', { headers: { cookie } })).status, 401);
+  assert.equal(x.sql.prepare('SELECT COUNT(*) AS n FROM demo_auth_sessions WHERE email=?').get(INVITED).n, 0);
+});
+
+test('a database failure during the session check is a 500 with no data', async t => {
+  const x = invited(t);
+  const cookie = await signIn(x);
+  t.mock.method(console, 'error', () => {});
+  x.env.DB.prepare = () => { throw new Error('D1 is down'); };
+  const response = await x.anon('/api/auras', { headers: { cookie } });
+  assert.equal(response.status, 500);
+  assert.deepEqual(await response.json(), { error: 'The inbox request failed. Please retry.' });
+});
+
+test('the harness request is signed in, so existing API tests run behind the gate', async t => {
+  const x = setup(t);
+  assert.equal((await x.request('/api/auras')).status, 200);
+  assert.equal(x.sql.prepare('SELECT email FROM demo_auth_sessions').get().email, provisionedTester);
+});
+
+test('inbound mail still stores and replies with the gate on and no secret', async t => {
+  const x = setup(t), demo = enableReplies(x);
+  delete x.env.SESSION_SECRET;
+  await worker.email(demo.message('sales-test@34five.studio', 'gate-on@example.invalid'), x.env);
+  assert.equal(demo.replies.length, 1);
+  const rows = x.sql.prepare("SELECT direction,status FROM email_messages WHERE aura_id='aura_demo_002' AND thread_id IN (SELECT thread_id FROM email_messages WHERE rfc_message_id='gate-on@example.invalid') ORDER BY direction").all();
+  assert.deepEqual(rows.map(r => [r.direction, r.status]), [['in', 'received'], ['out', 'sent']]);
 });

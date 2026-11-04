@@ -1,7 +1,9 @@
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import worker from '../worker/index.ts';
+import { createSession } from '../worker/auth.ts';
 
+const TESTER = 'tester@example.invalid';
 export const ORG = 'e07_demo_org';
 export const SALES = 'e07_demo_aura_sales', SUPPORT = 'e07_demo_aura_support';
 
@@ -47,7 +49,14 @@ export function setup(t) {
     ASSETS:{ async fetch(){ return new Response('app'); } },
   };
   const anon = (path,options) => worker.fetch(new Request('https://inbox.example'+path,options),env);
-  const x = { env,sql,objects,sent,failSend:false,anon, async request(path,options) { return anon(path,options); } };
+  sql.exec(`INSERT INTO demo_auth_invites (email,invited_by,invited_at) VALUES ('${TESTER}','test','2026-11-04T00:00:00.000Z')`);
+  let cookie;
+  const x = { env,sql,objects,sent,failSend:false,anon, async request(path,options={}) {
+    cookie ??= (await createSession(env,TESTER)).split(';')[0];
+    const headers = new Headers(options.headers);
+    headers.set('cookie',cookie);
+    return anon(path,{ ...options,headers });
+  } };
   return x;
 }
 
