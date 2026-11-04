@@ -1,4 +1,5 @@
 import { api } from './api.ts';
+import { authApi } from './auth.ts';
 import { receive } from './inbound.ts';
 import { HttpError, type Env } from './types.ts';
 import { json } from './utils.ts';
@@ -13,8 +14,11 @@ export default {
       secured.headers.set('X-Content-Type-Options', 'nosniff');
       return secured;
     }
-    try { return await api(request, env); }
-    catch (error) {
+    try {
+      const route = path.replace(/\/$/, '');
+      if (route === '/api/auth' || route.startsWith('/api/auth/')) return await authApi(request, env, route);
+      return await api(request, env);
+    } catch (error) {
       if (error instanceof HttpError) return json({ error: error.message }, error.status);
       console.error(JSON.stringify({ event: 'inbox_api_error', request_id: crypto.randomUUID() }));
       return json({ error: 'The inbox request failed. Please retry.' }, 500);
