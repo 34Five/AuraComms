@@ -9,6 +9,12 @@ export interface Env {
   DEMO_ORG_ID: string;
   TEST_MODE: string;
   AUTO_REPLY_ENABLED?: string;
+  AUTO_REPLY_MODE?: string;
+  DEFAULT_LLM_MODEL?: string;
+  LLM_SENDER_HOURLY_CAP?: string;
+  LLM_AURA_DAILY_CAP?: string;
+  GEMINI_API_KEY?: string;
+  ANTHROPIC_API_KEY?: string;
 }
 
 export class HttpError extends Error {

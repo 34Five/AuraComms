@@ -10,7 +10,8 @@
     "test": "node --test tests/*.test.mjs",
     "build": "vite build",
     "check": "npm run typecheck && npm test && npm run build && wrangler deploy --dry-run",
-    "deploy": "npm run build && wrangler deploy"
+    "deploy": "npm run build && wrangler deploy",
+    "llm:smoke": "node scripts/llm-smoke.mjs"
   },
   "dependencies": {
     "dompurify": "^3.3.0",

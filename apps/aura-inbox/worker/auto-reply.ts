@@ -2,11 +2,33 @@ import type { Email } from 'postal-mime';
 import type { Env } from './types.ts';
 import { messageIds } from './utils.ts';
 import { Governance, TEST_ADDRESSES } from './governance.ts';
+import { LlmError, failureClass, safeDetail } from './llm/http.ts';
+import { auraConfig, buildReplyPrompt, finalizeReply, loadThread } from './llm/prompt.ts';
+import { createProvider, resolveModel, type ModelRef } from './llm/provider.ts';
 
 const ADDRESSES = new Set(TEST_ADDRESSES);
 const SAMPLE = '34Five Aura email demo attachment.\nThis is a sample file for testing only.\n';
 const encoder = new TextEncoder();
 type Context = { org_id: string; aura_id: string; address_id: string; assignment_id: string; message_id: string; thread_id: string };
+
+function capValue(value: string | undefined, fallback: number): number {
+  return value && /^\d+$/.test(value) ? Number(value) : fallback;
+}
+
+async function llmCapReached(env: Env, context: Context, sender: string): Promise<string | null> {
+  const now = new Date();
+  const hourAgo = new Date(now.getTime() - 3_600_000).toISOString();
+  const midnight = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
+  // Every attempt counts, whatever its status, because each one cost a provider call.
+  // This check is not atomic with the claim, so concurrent mail can overshoot slightly. The Aura daily cap is the real ceiling.
+  const counts = await env.DB.prepare(`SELECT
+    (SELECT COUNT(*) FROM email_messages WHERE org_id=? AND direction='out' AND substr(id,1,10)='reply_llm_' AND envelope_to=? COLLATE NOCASE AND created_at>=?) AS sender_count,
+    (SELECT COUNT(*) FROM email_messages WHERE org_id=? AND aura_id=? AND direction='out' AND substr(id,1,10)='reply_llm_' AND created_at>=?) AS aura_count`)
+    .bind(context.org_id,sender,hourAgo,context.org_id,context.aura_id,midnight).first<{ sender_count: number; aura_count: number }>();
+  if ((counts?.sender_count ?? 0) >= capValue(env.LLM_SENDER_HOURLY_CAP,10)) return 'sender_hourly_cap';
+  if ((counts?.aura_count ?? 0) >= capValue(env.LLM_AURA_DAILY_CAP,200)) return 'aura_daily_cap';
+  return null;
+}
 
 export async function autoReply(message: ForwardableEmailMessage, env: Env, parsed: Email, context: Context): Promise<void> {
   if (env.TEST_MODE !== 'true' || env.AUTO_REPLY_ENABLED !== 'true') return;
@@ -46,8 +68,13 @@ export async function autoReply(message: ForwardableEmailMessage, env: Env, pars
     .bind(context.org_id,context.aura_id,context.assignment_id,context.address_id,new Date().toISOString(),address).first<{ name: string }>();
   const active = await activeRoute();
   if (!active) return skip('assignment_no_longer_active');
-  const includeAttachment = parsed.attachments.length > 0 || /\battachments?\b/i.test(`${subject}\n${parsed.text ?? ''}\n${(parsed.html ?? '').replace(/<[^>]*>/g,' ')}`);
-  const text = [
+  const useLlm = env.AUTO_REPLY_MODE === 'llm';
+  if (useLlm) {
+    const reason = await llmCapReached(env,context,sender);
+    if (reason) return log('inbox_llm_reply_skipped',{ reason });
+  }
+  const includeAttachment = !useLlm && (parsed.attachments.length > 0 || /\battachments?\b/i.test(`${subject}\n${parsed.text ?? ''}\n${(parsed.html ?? '').replace(/<[^>]*>/g,' ')}`));
+  let text: string | null = useLlm ? null : [
     'Hello! This is the 34Five Aura email demo.',
     `Your email reached ${address} (${active.name}), and this is an automatic test reply.`,
     `We received ${parsed.attachments.length} attachment(s).`,
@@ -55,7 +82,8 @@ export async function autoReply(message: ForwardableEmailMessage, env: Env, pars
     'Reply to this email to continue testing the same conversation.',
     'This is a fixed demo response, not an AI-generated answer.',
   ].join('\n\n');
-  const id = `reply_${context.message_id}`;
+  // The reply_llm_ prefix is how the cost caps recognise generated replies without a schema change.
+  const id = `${useLlm ? 'reply_llm_' : 'reply_'}${context.message_id}`;
   const parentId = originalId.slice(1,-1);
   const chain = [...new Set([...references,parentId])];
   // This unique key claims the send atomically, including redeliveries with changed MIME bytes.
@@ -65,7 +93,7 @@ export async function autoReply(message: ForwardableEmailMessage, env: Env, pars
     envelope_from,envelope_to,from_address,from_name,subject,body_storage,body_text,body_size_bytes,in_reply_to,references_json,activity_at,created_at)
     VALUES (?,?,?,?,?,?,'out','draft',?,?,?,?,?,?,'inline',?,?,?,?,?,?) ON CONFLICT DO NOTHING`)
     .bind(id,context.org_id,context.aura_id,context.thread_id,context.address_id,context.assignment_id,sendKey,
-      address,message.from,address,active.name,replySubject,text,encoder.encode(text).byteLength,parentId,JSON.stringify(chain),now,now).run();
+      address,message.from,address,active.name,replySubject,text,encoder.encode(text ?? '').byteLength,parentId,JSON.stringify(chain),now,now).run();
   if (!claim.meta.changes) return skip('duplicate_reply_claim');
   try {
     const statements = [env.DB.prepare(`INSERT INTO email_message_recipients (id,org_id,aura_id,message_id,kind,ordinal,address,address_key)
@@ -87,6 +115,41 @@ export async function autoReply(message: ForwardableEmailMessage, env: Env, pars
       .bind(context.org_id,context.aura_id,id).run().catch(() => undefined);
     log('inbox_auto_reply_preparation_failed', { reply_id: id });
     return;
+  }
+  if (useLlm) {
+    let model: ModelRef | null = null;
+    try {
+      const row = await env.DB.prepare('SELECT * FROM auras WHERE org_id=? AND id=?')
+        .bind(context.org_id,context.aura_id).first<Record<string, unknown>>();
+      if (!row) throw new LlmError('E_LLM_CONFIG','The Aura row is missing.');
+      model = resolveModel(row.llm_id ?? null,env.DEFAULT_LLM_MODEL);
+      const aura = auraConfig(row);
+      const provider = createProvider(model,env);
+      const thread = await loadThread(env,context);
+      const attachmentCount = parsed.attachments.filter(a => a.disposition !== 'inline').length;
+      const reply = await provider.generateReply(buildReplyPrompt(aura,thread,{ attachmentCount }));
+      text = finalizeReply(reply.text,{ truncated:reply.truncated });
+      if (!text) throw new LlmError('E_LLM_EMPTY','The reply was empty after cleanup.');
+      await env.DB.prepare('UPDATE email_messages SET body_text=?,body_size_bytes=? WHERE org_id=? AND aura_id=? AND id=?')
+        .bind(text,encoder.encode(text).byteLength,context.org_id,context.aura_id,id).run();
+    } catch (error) {
+      const secrets = [env.GEMINI_API_KEY ?? '',env.ANTHROPIC_API_KEY ?? ''];
+      const code = error instanceof LlmError ? error.code : 'E_LLM_UNKNOWN';
+      const detail = safeDetail(error instanceof Error ? error.message : error,secrets);
+      const failedAt = new Date().toISOString();
+      const fields = { provider:model?.provider ?? null, model:model?.model ?? null, code, class:failureClass(code), message:detail };
+      // Nothing has been sent, so this outcome is certain. The claim stays to prevent an automatic retry.
+      await env.DB.batch([
+        env.DB.prepare("UPDATE email_messages SET status='failed' WHERE org_id=? AND aura_id=? AND id=?").bind(context.org_id,context.aura_id,id),
+        env.DB.prepare("UPDATE email_message_recipients SET delivery_status='failed',delivery_status_at=? WHERE org_id=? AND aura_id=? AND message_id=?")
+          .bind(failedAt,context.org_id,context.aura_id,id),
+        env.DB.prepare(`INSERT INTO email_events (id,org_id,aura_id,message_id,event_type,provider,dedup_key,occurred_at,raw_payload_json)
+          VALUES (?,?,?,?,'failed',?,?,?,?) ON CONFLICT DO NOTHING`)
+          .bind(`${id}_failed`,context.org_id,context.aura_id,id,model?.provider ?? 'llm',`${id}:failed`,failedAt,JSON.stringify({ stage:'generation', retry_safe:false, ...fields })),
+      ]).catch(() => log('inbox_llm_failure_record_failed',{ reply_id:id }));
+      log('inbox_llm_reply_failed',{ reply_id:id, ...fields });
+      return;
+    }
   }
   const governance = new Governance(env);
   try {
