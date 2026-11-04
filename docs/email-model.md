@@ -157,8 +157,9 @@ node spikes/cf-email/node_modules/wrangler/bin/wrangler.js d1 execute EMAIL_DB -
 ```
 
 Use a new local directory for a fresh run; parent fixtures and seeds are one-time
-imports. migrations_dir points to scripts, where only 0001_email_model.sql is a
-top-level migration. Seed/query SQL is nested and is not applied as migrations.
+imports. migrations_dir points to scripts: `0001_email_model.sql` creates E07 and
+`0002_email_governance.sql` upgrades reviews for AXI-8 automatic decisions.
+Seed/query SQL is nested and is not applied as migrations.
 Wrangler tracks the applied filename in d1_migrations; do not rename applied migrations.
 The last command is a one-time reassignment smoke check on the fictional seed. It
 should show msg_quote_in still under Sales Aura, msg_d1_new under Support Aura, no
@@ -211,8 +212,9 @@ default. Services check active reviewer membership/access when deciding. Hash th
 approved body, recipients, attachment references and relevant headers; edits invalidate
 the decision. On reset, increment thread review_epoch/state_version and supersede stale
 reviews atomically. Before sending, compare epoch, content and active routing assignment.
-The final tier vocabulary, first-reply/reset rules and reviewer revocation policy remain
-AXI-8 decisions. rules_json is an extension point, not an evaluator or recipient allowlist.
+Tier vocabulary, first-reply/reset rules and reviewer revocation behavior are documented
+in [email-governance.md](email-governance.md), including remaining product assumptions.
+rules_json is an extension point; the schema itself does not evaluate guardrails.
 
 Phase 2 reserves attachment extraction status/text reference/error/time (E27), reply
 recipient decision/reason/time (E28), and stable contacts with nullable member and
