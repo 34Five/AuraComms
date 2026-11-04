@@ -73,9 +73,9 @@ npm run llm:smoke -- "hello"
 npm run llm:smoke -- --model anthropic:claude-sonnet-4-5 "hello"
 ```
 
-The prompt uses the Aura's name, role, facet, personality, and blocklist (topics to refuse), plus the thread's received and sent messages with quoted history removed. HTML-only mail is converted to text. A thread is limited to 24000 characters: the oldest messages drop first, and the email being answered is always kept. Thread content is wrapped as untrusted data. Attachments are not read: the reply acknowledges them and sends no file back.
+The prompt uses the Aura's name, any role, facet, personality, and blocklist (topics to decline) on its row, plus the thread's received and sent messages with quoted history removed. HTML-only mail is converted to text. A thread is limited to 24000 characters: the oldest messages drop first, and the email being answered is always kept. Thread content is wrapped as untrusted data. Attachments are not read: the reply acknowledges them and sends no file back.
 
-An Aura is its own persona, and it must sound in email as it does everywhere else. So the prompt uses only the Aura's own configuration, and nothing here adds a voice. Null fields are left out. The bound `auras` table currently has only `id`, `org_id`, and `name`, so until the Aura's real configuration is reachable, replies use the Aura's name and the email rules alone. The rules cover format, length, signing, untrusted content, invented facts, credentials, and not revealing instructions.
+The demo uses a neutral system instruction plus whatever config the Aura's row holds. Empty fields are left out, and nothing here adds a voice or tone. The bound `auras` table currently has only `id`, `org_id`, and `name`, so replies use the Aura's name and the email rules alone. The authoritative source for Aura configuration is to be agreed with 34Five (AXI-24).
 
 Replies are capped at 1024 output tokens and 2000 characters at a sentence boundary. A reply cut off by the token limit is still sent, trimmed to its last complete sentence.
 
