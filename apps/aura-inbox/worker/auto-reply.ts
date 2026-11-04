@@ -39,9 +39,10 @@ async function llmCapReached(env: Env, context: Context, sender: string): Promis
   const hourAgo = new Date(now.getTime() - 3_600_000).toISOString();
   const midnight = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
   // Every attempt counts, whatever its status, because each one cost a provider call.
+  // This check is not atomic with the claim, so concurrent mail can overshoot slightly. The Aura daily cap is the real ceiling.
   const counts = await env.DB.prepare(`SELECT
-    (SELECT COUNT(*) FROM email_messages WHERE org_id=? AND direction='out' AND id LIKE 'reply_llm_%' AND envelope_to=? COLLATE NOCASE AND created_at>=?) AS sender_count,
-    (SELECT COUNT(*) FROM email_messages WHERE org_id=? AND aura_id=? AND direction='out' AND id LIKE 'reply_llm_%' AND created_at>=?) AS aura_count`)
+    (SELECT COUNT(*) FROM email_messages WHERE org_id=? AND direction='out' AND substr(id,1,10)='reply_llm_' AND envelope_to=? COLLATE NOCASE AND created_at>=?) AS sender_count,
+    (SELECT COUNT(*) FROM email_messages WHERE org_id=? AND aura_id=? AND direction='out' AND substr(id,1,10)='reply_llm_' AND created_at>=?) AS aura_count`)
     .bind(context.org_id,sender,hourAgo,context.org_id,context.aura_id,midnight).first<{ sender_count: number; aura_count: number }>();
   if ((counts?.sender_count ?? 0) >= capValue(env.LLM_SENDER_HOURLY_CAP,10)) return 'sender_hourly_cap';
   if ((counts?.aura_count ?? 0) >= capValue(env.LLM_AURA_DAILY_CAP,200)) return 'aura_daily_cap';
@@ -161,7 +162,7 @@ export async function autoReply(message: ForwardableEmailMessage, env: Env, pars
         env.DB.prepare(`INSERT INTO email_events (id,org_id,aura_id,message_id,event_type,provider,dedup_key,occurred_at,raw_payload_json)
           VALUES (?,?,?,?,'failed',?,?,?,?) ON CONFLICT DO NOTHING`)
           .bind(`${id}_failed`,context.org_id,context.aura_id,id,model?.provider ?? 'llm',`${id}:failed`,failedAt,JSON.stringify({ stage:'generation', retry_safe:false, ...fields })),
-      ]).catch(() => undefined);
+      ]).catch(() => log('inbox_llm_failure_record_failed',{ reply_id:id }));
       log('inbox_llm_reply_failed',{ reply_id:id, ...fields });
       return;
     }

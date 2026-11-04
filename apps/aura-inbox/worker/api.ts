@@ -112,7 +112,7 @@ export async function api(request: Request, env: Env): Promise<Response> {
       const [r, a, f] = await Promise.all([
         env.DB.prepare(`SELECT message_id,kind,address,display_name FROM email_message_recipients WHERE org_id=? AND aura_id=? AND kind<>'bcc' AND message_id IN (${placeholders}) ORDER BY ordinal`).bind(org,auraId,...ids).all<Row>(),
         env.DB.prepare(`SELECT id,message_id,filename,content_type,size_bytes FROM email_attachments WHERE org_id=? AND aura_id=? AND message_id IN (${placeholders}) ORDER BY ordinal`).bind(org,auraId,...ids).all<Row>(),
-        env.DB.prepare(`SELECT message_id,raw_payload_json FROM email_events WHERE org_id=? AND aura_id=? AND event_type='failed' AND message_id IN (${placeholders})`).bind(org,auraId,...ids).all<Row>(),
+        env.DB.prepare(`SELECT message_id,raw_payload_json FROM email_events WHERE org_id=? AND aura_id=? AND event_type='failed' AND json_extract(raw_payload_json,'$.stage')='generation' AND message_id IN (${placeholders})`).bind(org,auraId,...ids).all<Row>(),
       ]);
       recipients = r.results; attachments = a.results; failures = f.results;
     }

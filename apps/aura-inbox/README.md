@@ -73,7 +73,7 @@ npm run llm:smoke -- "hello"
 npm run llm:smoke -- --model anthropic:claude-sonnet-4-5 "hello"
 ```
 
-The prompt uses the Aura's name, role, facet, personality, and blocklist (topics to refuse), plus the thread's received and sent messages with quoted history removed. Thread content is wrapped as untrusted data. Attachments are not read: the reply acknowledges them and sends no file back.
+The prompt uses the Aura's name, role, facet, personality, and blocklist (topics to refuse), plus the thread's received and sent messages with quoted history removed. HTML-only mail is converted to text. A thread is limited to 24000 characters: the oldest messages drop first, and the email being answered is always kept. Thread content is wrapped as untrusted data. Attachments are not read: the reply acknowledges them and sends no file back.
 
 Replies are capped at 1024 output tokens and 2000 characters at a sentence boundary. A reply cut off by the token limit is still sent, trimmed to its last complete sentence.
 

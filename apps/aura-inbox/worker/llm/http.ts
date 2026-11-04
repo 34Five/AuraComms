@@ -11,7 +11,7 @@ export class LlmError extends Error {
   }
 }
 
-export type FailureClass = 'provider_error' | 'timeout' | 'safety_block' | 'empty_reply' | 'bad_config';
+export type FailureClass = 'provider_error' | 'timeout' | 'safety_block' | 'empty_reply' | 'bad_config' | 'internal_error';
 
 // The inbox has no login. These phrases are public, and raw provider detail stays in email_events.
 export const FAILURE_SUMMARIES: Record<FailureClass, string> = {
@@ -20,6 +20,7 @@ export const FAILURE_SUMMARIES: Record<FailureClass, string> = {
   safety_block: 'The AI provider blocked this reply for safety reasons.',
   empty_reply: 'The AI provider returned an empty reply.',
   bad_config: 'AI replies are not configured correctly for this Aura.',
+  internal_error: 'The reply could not be generated.',
 };
 
 export function failureClass(code: unknown): FailureClass {
@@ -28,7 +29,8 @@ export function failureClass(code: unknown): FailureClass {
     case 'E_LLM_SAFETY': return 'safety_block';
     case 'E_LLM_EMPTY': return 'empty_reply';
     case 'E_LLM_CONFIG': case 'E_LLM_NO_KEY': return 'bad_config';
-    default: return 'provider_error';
+    case 'E_LLM_NETWORK': case 'E_LLM_BAD_RESPONSE': return 'provider_error';
+    default: return typeof code === 'string' && code.startsWith('E_LLM_HTTP_') ? 'provider_error' : 'internal_error';
   }
 }
 
