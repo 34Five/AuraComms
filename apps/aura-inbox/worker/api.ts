@@ -1,8 +1,26 @@
 import type { Env } from './types.ts';
 import { HttpError } from './types.ts';
 import { cursor, encodeCursor, json, pageSize, requireId } from './utils.ts';
+import { FAILURE_SUMMARIES, failureClass } from './llm/http.ts';
 
 type Row = Record<string, any>;
+
+const STALE_REPLY_MS = 120_000;
+
+function replyFailure(event: Row | undefined): { class: string; summary: string } | null {
+  if (!event) return null;
+  let code: unknown;
+  try { code = JSON.parse(event.raw_payload_json).code; } catch { code = null; }
+  const name = failureClass(code);
+  return { class: name, summary: FAILURE_SUMMARIES[name] };
+}
+
+// Derived at read time. A generation that died mid-call must not look like it is still running.
+function displayState(row: Row, now: number): 'timed_out' | null {
+  const stalled = row.direction === 'out' && row.status === 'sending' && row.body_storage === 'inline'
+    && row.body_text === null && row.body_html === null && now - Date.parse(row.created_at) > STALE_REPLY_MS;
+  return stalled ? 'timed_out' : null;
+}
 
 async function aura(env: Env, id: string): Promise<Row> {
   const row = await env.DB.prepare('SELECT id, name FROM auras WHERE org_id = ? AND id = ?')
@@ -88,18 +106,22 @@ export async function api(request: Request, env: Env): Promise<Response> {
     const rows = results.slice(0, limit);
     const last = rows.at(-1);
     const ids = rows.map(m => m.id);
-    let recipients: Row[] = [], attachments: Row[] = [];
+    let recipients: Row[] = [], attachments: Row[] = [], failures: Row[] = [];
     if (ids.length) {
       const placeholders = ids.map(() => '?').join(',');
-      const [r, a] = await Promise.all([
+      const [r, a, f] = await Promise.all([
         env.DB.prepare(`SELECT message_id,kind,address,display_name FROM email_message_recipients WHERE org_id=? AND aura_id=? AND kind<>'bcc' AND message_id IN (${placeholders}) ORDER BY ordinal`).bind(org,auraId,...ids).all<Row>(),
         env.DB.prepare(`SELECT id,message_id,filename,content_type,size_bytes FROM email_attachments WHERE org_id=? AND aura_id=? AND message_id IN (${placeholders}) ORDER BY ordinal`).bind(org,auraId,...ids).all<Row>(),
+        env.DB.prepare(`SELECT message_id,raw_payload_json FROM email_events WHERE org_id=? AND aura_id=? AND event_type='failed' AND message_id IN (${placeholders})`).bind(org,auraId,...ids).all<Row>(),
       ]);
-      recipients = r.results; attachments = a.results;
+      recipients = r.results; attachments = a.results; failures = f.results;
     }
+    const now = Date.now();
     return json({ thread, messages: rows.reverse().map(row => ({ ...row,
       recipients: recipients.filter(r => r.message_id === row.id),
       attachments: attachments.filter(a => a.message_id === row.id),
+      failure: replyFailure(failures.find(f => f.message_id === row.id)),
+      display_state: displayState(row, now),
     })), nextCursor: results.length > limit && last ? encodeCursor(last.activity_at,last.id) : null });
   }
   if (parts[3] === 'messages' && parts[4]) {

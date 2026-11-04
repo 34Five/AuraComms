@@ -46,6 +46,8 @@ The existing `spike-test` and `anthony` routes and catch-all remain unchanged.
 
 `AUTO_REPLY_ENABLED=true` enables a fixed demo response for both real test addresses. The reply uses the receiving Aura's name and address. It preserves the conversation subject and uses Cloudflare's native reply API for sender validation and threading. Mention `attachment` or include an attachment to receive `aura-demo.txt`. Uploaded files are not echoed back.
 
+`AUTO_REPLY_MODE` chooses the reply text. `fixed` (the default) sends the fixed demo response. `llm` generates the reply as described below. Any other value behaves as `fixed`.
+
 Outgoing replies, recipients, and sample attachments are saved in the same Aura conversation. A reply is marked `sent` only after provider acceptance. Recipient delivery remains `accepted`, not `delivered`. The existing seeded messages are not answered retroactively.
 
 The handler skips automated mail, mailing lists, bounces, known test-address senders, invalid Message-IDs, and threads with 20 references. It ignores incoming Reply-To redirection. A unique D1 send key claims each sender/Message-ID pair within the Aura before a provider call. The active address assignment is checked again before dispatch. Duplicate deliveries cannot create a second reply claim.
@@ -57,6 +59,27 @@ The handler resolves the active domain, address, and assignment from the envelop
 The handler uploads raw MIME, attachments, and large bodies to private R2. D1 batch commits contacts, thread, message, recipients, and attachment references together. Private object keys include a delivery-attempt ID. Concurrent duplicate cleanup cannot delete another delivery's objects. An ambiguous database failure may leave unreferenced R2 objects for later cleanup. No automatic deletion runs against referenced mail.
 
 The test limits are 25 MiB per raw email, 20 To/Cc recipients, and 20 attachments. Body text and HTML above 64 KiB use R2. Unknown/inactive receiving addresses are rejected. Address reassignment preserves historical messages with their original Aura and assignment.
+
+### LLM replies
+
+With `AUTO_REPLY_MODE=llm`, the reply text comes from a model instead of the fixed response. Claiming, threading, the headers, and the send path stay the same. `sendReply()` in `worker/auto-reply.ts` is the single dispatch point for later routing through the rules engine.
+
+The model is config, not code. An Aura's `auras.llm_id` selects it in the form `provider:model`, for example `gemini:gemini-3.5-flash-lite` or `anthropic:claude-sonnet-4-5`. A null or unparseable `llm_id` falls back to `DEFAULT_LLM_MODEL` in `wrangler.jsonc`. Providers live in `worker/llm/`.
+
+Keys are Worker secrets: `GEMINI_API_KEY` and `ANTHROPIC_API_KEY`. Locally, copy `.dev.vars.example` to `.dev.vars` (gitignored). To prove a key and model work without deploying:
+
+```sh
+npm run llm:smoke -- "hello"
+npm run llm:smoke -- --model anthropic:claude-sonnet-4-5 "hello"
+```
+
+The prompt uses the Aura's name, role, facet, personality, and blocklist (topics to refuse), plus the thread's received and sent messages with quoted history removed. Thread content is wrapped as untrusted data. Attachments are not read: the reply acknowledges them and sends no file back.
+
+Replies are capped at 1024 output tokens and 2000 characters at a sentence boundary. A reply cut off by the token limit is still sent, trimmed to its last complete sentence.
+
+If the provider fails, times out after 20 seconds, returns nothing, or blocks the reply, nothing is sent. There is no fallback to the fixed text. The claimed row becomes `failed`, an `email_events` row keeps the sanitized detail, and the log records `inbox_llm_reply_failed`. The inbox shows "Reply failed" with a fixed public phrase for the error class. A reply row that is still `sending` with no body after 120 seconds shows "Reply timed out". That state is derived when read and writes nothing.
+
+Each generated reply costs a provider call, and these addresses are public. `LLM_SENDER_HOURLY_CAP` (default 10, rolling hour, per sender) and `LLM_AURA_DAILY_CAP` (default 200, UTC day, per Aura) limit them. Every attempt counts, including failed ones. Over a cap, the handler makes no call, sends nothing, creates no reply row, and logs `inbox_llm_reply_skipped`.
 
 ## Deploy and provision
 

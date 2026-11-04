@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import DOMPurify from 'dompurify';
+import { messageState } from './message-state.ts';
 import { fragmentToText, splitQuotedText } from './quoted-text.ts';
 
 type Aura = { id: string; name: string; thread_count: number; message_count: number;
@@ -9,7 +10,8 @@ type Thread = { id: string; subject: string | null; sender: string | null; previ
 type Message = { id: string; direction: string; status: string; from_address: string; from_name: string | null;
   subject: string | null; body_text: string | null; body_html: string | null; body_storage: string; activity_at: string;
   recipients: { kind: string; address: string; display_name: string | null }[];
-  attachments: { id: string; filename: string; size_bytes: number }[] };
+  attachments: { id: string; filename: string; size_bytes: number }[];
+  failure: { class: string; summary: string } | null; display_state: string | null };
 type ThreadPage = { threads: Thread[]; nextCursor: string | null };
 type MessagePage = { thread: Thread; messages: Message[]; nextCursor: string | null };
 
@@ -68,6 +70,8 @@ function MessageCard({ message: m, auraId }: { message: Message; auraId: string 
     try { setBody(await get(`/api/auras/${auraId}/messages/${m.id}/body`)); }
     catch (e) { setError((e as Error).message); } finally { setLoading(false); }
   };
+  const state = messageState(m);
+  const hasBody = m.body_storage === 'r2' || m.body_text !== null || m.body_html !== null;
   return <article className={m.direction === 'out' ? 'message-card outbound' : 'message-card'}>
     <div className="message-heading"><span className="sender-avatar">{initials(m.from_name || m.from_address)}</span>
       <div className="sender-detail"><strong>{m.from_name || m.from_address}</strong>{m.from_name && <span>{m.from_address}</span>}</div>
@@ -75,11 +79,14 @@ function MessageCard({ message: m, auraId }: { message: Message; auraId: string 
     </div>
     <div className="recipient-line">To: {m.recipients.filter(r => r.kind === 'to').map(r => r.address).join(', ') || '—'}
       {m.recipients.some(r => r.kind === 'cc') && <span className="recipient-cc">Cc: {m.recipients.filter(r => r.kind === 'cc').map(r => r.address).join(', ')}</span>}</div>
-    {m.body_storage === 'r2' && !body ? <button className="text-button" onClick={load} disabled={loading}>{loading ? 'Loading message…' : 'Load full message'}</button>
-      : <MessageBody text={plain(body?.body_text ?? m.body_text,body?.body_html ?? m.body_html)}/>}
+    {state === 'failed' && <div className="reply-failed" role="alert"><strong>Reply failed</strong>{m.failure && <p>{m.failure.summary}</p>}<p>No email was sent.</p></div>}
+    {state === 'timed_out' && <div className="reply-failed" role="alert"><strong>Reply timed out</strong><p>The reply did not finish generating, and no email was sent.</p></div>}
+    {state === 'generating' && <p className="reply-generating">Generating reply…</p>}
+    {(state === 'normal' || (state === 'failed' && hasBody)) && (m.body_storage === 'r2' && !body ? <button className="text-button" onClick={load} disabled={loading}>{loading ? 'Loading message…' : 'Load full message'}</button>
+      : <MessageBody text={plain(body?.body_text ?? m.body_text,body?.body_html ?? m.body_html)}/>)}
     {error && <p className="inline-error" role="alert">{error}</p>}
     {m.attachments.length > 0 && <div className="attachments">{m.attachments.map(a => <a key={a.id} href={`/api/auras/${auraId}/messages/${m.id}/attachments/${a.id}`} className="attachment"><Icon name="attachment" size={16}/><span>{a.filename || 'Attachment'}<small>{Math.max(1,Math.round(a.size_bytes/1024))} KB</small></span></a>)}</div>}
-    <div className="message-status"><Icon name="check" size={13}/>{m.direction === 'in' ? 'Received' : m.status}</div>
+    {state === 'normal' && <div className="message-status"><Icon name="check" size={13}/>{m.direction === 'in' ? 'Received' : m.status}</div>}
   </article>;
 }
 
