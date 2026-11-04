@@ -159,6 +159,7 @@ node spikes/cf-email/node_modules/wrangler/bin/wrangler.js d1 execute EMAIL_DB -
 Use a new local directory for a fresh run; parent fixtures and seeds are one-time
 imports. migrations_dir points to scripts: `0001_email_model.sql` creates E07 and
 `0002_email_governance.sql` upgrades reviews for AXI-8 automatic decisions.
+`0003_email_address_provisioning.sql` adds Cloudflare routing state for AXI-19 addresses.
 Seed/query SQL is nested and is not applied as migrations.
 Wrangler tracks the applied filename in d1_migrations; do not rename applied migrations.
 The last command is a one-time reassignment smoke check on the fictional seed. It

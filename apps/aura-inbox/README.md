@@ -1,6 +1,6 @@
 # Aura inbox test
 
-A read-only inbox for each Aura, with real incoming email. One Cloudflare Worker serves the React/Vite UI and `/api` endpoints.
+A read-only inbox for each Aura, with real incoming email. One Cloudflare Worker serves the React/Vite UI and `/api` endpoints. The only writes are generating an address for an Aura and retrying its provisioning.
 
 This is a public test deployment with no login. `DEMO_ORG_ID` limits all queries and inbound routing to `org_demo_001`. It is not authentication. Use test messages only. Add authentication and member/Aura authorization before using customer data.
 
@@ -104,6 +104,40 @@ This command checks existing ownership before adding the real addresses and acti
 Create the two literal `to` routing rules with `wrangler email routing rules create`, action `worker:aura-inbox-test`. List existing rules before changes and verify them afterward. Do not replace the domain catch-all or repoint the spike Worker.
 
 To verify externally, send a test email to each alias. Confirm the message appears only in its Aura's inbox within five seconds. Reply from the external sender to the same alias to verify thread grouping. Local integration tests cover MIME storage and routing, but cannot establish external provider delivery.
+
+## Generate an address for an Aura
+
+An Aura with no address shows **Generate email** on its card. The button proposes `<aura-name>@<domain>` from the active rows in `email_domains`. With several active domains it lists them. Confirming creates the address and its assignment in one D1 batch, then asks Cloudflare to route it. An Aura keeps one address: if it has one, the API returns it and creates nothing.
+
+| Endpoint | What it does |
+|---|---|
+| `GET /api/auras/:id/address` | The current address and provisioning status, or 404 |
+| `GET /api/auras/:id/address/proposal` | The address each active domain would give |
+| `POST /api/auras/:id/address` | Creates the address. With several active domains, send `domain_id`. With none, returns 409 |
+| `POST /api/auras/:id/address/provision` | Retries the routing rule |
+
+POST requests must be JSON, which stops other sites posting from a browser. There is still no login, so anyone with the link can generate an address for any Aura in the demo org and create its routing rule. Each Aura gets one address, routed only to the demo Worker.
+
+Provisioning state lives in `email_address_provisioning`:
+
+- `provisioning_pending`: the secrets are not set. The response and the card show the exact rule to create.
+- `failed`: Cloudflare refused or could not be reached, or another rule already routes this address. That rule is never changed. The card shows the reason and a retry.
+- `active`: the rule exists. An address with no row was routed by hand before this table existed, and also counts as active.
+
+A failure never blocks the address. Retry finishes it once the cause is fixed.
+
+Apply the migration before deploying, because `/api/auras` reads the new table. It only adds a table, and earlier deployed code ignores it.
+
+```sh
+npx wrangler d1 execute DB --remote --file ../../scripts/0003_email_address_provisioning.sql
+```
+
+To let the Worker create rules, set a token limited to Email Routing Rules on the zone, and the zone ID. A domain row's `cloudflare_zone_id` takes priority over `CF_ZONE_ID`. `DEMO_WORKER_NAME` sets the target Worker and defaults to `aura-inbox-demo`.
+
+```sh
+npx wrangler secret put CF_API_TOKEN --env demo
+npx wrangler secret put CF_ZONE_ID --env demo
+```
 
 ## Verification on November 2, 2026
 

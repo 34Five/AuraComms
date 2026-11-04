@@ -2,10 +2,12 @@ import type { Env } from './types.ts';
 import { HttpError } from './types.ts';
 import { cursor, encodeCursor, json, pageSize, requireId } from './utils.ts';
 import { FAILURE_SUMMARIES, failureClass } from './llm/http.ts';
+import { generateAddress, proposeAddress, readAddress, retryProvisioning } from './address.ts';
 
 type Row = Record<string, any>;
 
 const STALE_REPLY_MS = 120_000;
+const ADDRESS_WRITE = /^\/api\/auras\/[^/]+\/address(\/provision)?$/;
 
 function replyFailure(event: Row | undefined): { class: string; summary: string } | null {
   if (!event) return null;
@@ -40,9 +42,15 @@ export async function api(request: Request, env: Env): Promise<Response> {
   if (env.TEST_MODE !== 'true' || !env.DEMO_ORG_ID || env.DEMO_ORG_ID === 'org') {
     throw new HttpError(503, 'The test inbox is not configured.');
   }
-  if (request.method !== 'GET') return json({ error: 'This inbox is read-only.' }, 405);
   const url = new URL(request.url);
   const path = url.pathname.replace(/\/$/, '');
+  if (request.method !== 'GET' && !(request.method === 'POST' && ADDRESS_WRITE.test(path))) {
+    return json({ error: 'This inbox is read-only.' }, 405);
+  }
+  // A JSON content type forces a CORS preflight, which this API never grants, so other sites cannot post here.
+  if (request.method === 'POST' && !/^application\/json\b/i.test(request.headers.get('content-type') ?? '')) {
+    return json({ error: 'Send a JSON request.' }, 415);
+  }
   const org = env.DEMO_ORG_ID;
   if (path === '/api/health') {
     await env.DB.prepare('SELECT 1').first();
@@ -53,9 +61,11 @@ export async function api(request: Request, env: Env): Promise<Response> {
       (SELECT COUNT(*) FROM email_threads t WHERE t.org_id=a.org_id AND t.aura_id=a.id) AS thread_count,
       (SELECT COUNT(*) FROM email_messages m WHERE m.org_id=a.org_id AND m.aura_id=a.id) AS message_count
       FROM auras a WHERE a.org_id=? ORDER BY a.name, a.id`).bind(org).all<Row>();
-    const addresses = await env.DB.prepare(`SELECT x.aura_id, e.address, e.status, d.status AS domain_status
+    const addresses = await env.DB.prepare(`SELECT x.aura_id, e.address, e.status, d.status AS domain_status,
+      COALESCE(p.status,'active') AS provisioning_status
       FROM email_address_assignments x JOIN email_addresses e ON e.org_id=x.org_id AND e.id=x.address_id
       JOIN email_domains d ON d.org_id=e.org_id AND d.id=e.domain_id
+      LEFT JOIN email_address_provisioning p ON p.org_id=e.org_id AND p.address_id=e.id
       WHERE x.org_id=? AND x.ended_at IS NULL ORDER BY d.status='active' DESC, e.address`).bind(org).all<Row>();
     return json({ auras: results.map(row => ({ ...row, addresses: addresses.results.filter(a => a.aura_id === row.id) })) });
   }
@@ -63,6 +73,11 @@ export async function api(request: Request, env: Env): Promise<Response> {
   if (parts[0] !== 'api' || parts[1] !== 'auras' || !parts[2]) throw new HttpError(404, 'Endpoint not found.');
   const auraId = requireId(parts[2]);
   const selectedAura = await aura(env, auraId);
+  if (parts[3] === 'address') {
+    if (parts.length === 4) return request.method === 'POST' ? generateAddress(request, env, selectedAura) : readAddress(env, auraId);
+    if (parts.length === 5 && parts[4] === 'provision' && request.method === 'POST') return retryProvisioning(env, auraId);
+    if (parts.length === 5 && parts[4] === 'proposal') return proposeAddress(env, selectedAura);
+  }
   if (parts.length === 4 && parts[3] === 'inbox') {
     const limit = pageSize(url);
     const after = cursor(url.searchParams.get('cursor'));

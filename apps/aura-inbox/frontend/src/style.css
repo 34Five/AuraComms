@@ -167,9 +167,19 @@ button:focus-visible, a:focus-visible, select:focus-visible, summary:focus-visib
 
 .aura-label { flex: 1; min-width: 0; }
 .aura-label strong { display: block; font-size: var(--text-sm); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.aura-label small { display: block; margin-top: 2px; color: var(--rail-ink-muted); font-size: var(--text-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.aura-button.active .aura-label small { color: var(--surface-canvas); }
 .aura-count { font-size: var(--text-xs); font-weight: 500; }
+
+.aura-card { flex-shrink: 0; }
+.address-panel { padding: var(--space-1) var(--space-3) var(--space-2); color: var(--rail-ink-muted); font-size: var(--text-xs); }
+.address-text { overflow-wrap: anywhere; }
+.address-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-top: var(--space-1); }
+.address-select { width: 100%; padding: var(--space-1); border-radius: var(--radius-control); font-size: var(--text-xs); }
+.address-error { margin-top: var(--space-1); color: var(--surface-paper); overflow-wrap: anywhere; }
+.address-rule { margin-top: var(--space-1); overflow-wrap: anywhere; }
+.address-rule summary { cursor: pointer; }
+.rail-button { padding: 3px var(--space-2); border: 1px solid var(--rail-rule); border-radius: var(--radius-control); background: transparent; color: var(--rail-ink); font-size: var(--text-xs); }
+.rail-button:hover:not(:disabled) { background: var(--rail-hover); }
+.rail-button:disabled { opacity: .6; }
 
 .test-note {
   margin: auto var(--space-3) 0;
@@ -393,7 +403,8 @@ button:focus-visible, a:focus-visible, select:focus-visible, summary:focus-visib
   .brand small { display: inline; margin: 0 0 0 var(--space-2); }
   .section-label { display: none; }
   .aura-nav { flex-direction: row; flex-shrink: 0; gap: var(--space-2); margin-top: var(--space-3); overflow-x: auto; }
-  .aura-button { flex: 0 0 auto; width: 228px; padding: var(--space-2); }
+  .aura-card { flex: 0 0 auto; width: 228px; }
+  .aura-button { padding: var(--space-2); }
   .test-note { margin: var(--space-3) 0 0; padding-top: var(--space-2); }
   .test-note strong { display: inline; margin-right: var(--space-1); }
 

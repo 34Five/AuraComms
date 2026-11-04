@@ -11,6 +11,9 @@ export interface Env {
   LLM_AURA_DAILY_CAP?: string;
   GEMINI_API_KEY?: string;
   ANTHROPIC_API_KEY?: string;
+  CF_API_TOKEN?: string;
+  CF_ZONE_ID?: string;
+  DEMO_WORKER_NAME?: string;
 }
 
 export class HttpError extends Error {

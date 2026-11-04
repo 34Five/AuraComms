@@ -9,7 +9,7 @@ export function setup(t) {
   const sql = new DatabaseSync(':memory:');
   t.after(() => sql.close());
   sql.exec('PRAGMA foreign_keys=ON;');
-  for (const path of ['tests/email/fixtures/studio_parents_2026_10_22.sql','scripts/0001_email_model.sql','scripts/email/seed.sql']) {
+  for (const path of ['tests/email/fixtures/studio_parents_2026_10_22.sql','scripts/0001_email_model.sql','scripts/email/seed.sql','scripts/0003_email_address_provisioning.sql']) {
     sql.exec(readFileSync(new URL('../../../'+path,import.meta.url),'utf8'));
   }
   sql.exec("INSERT INTO auras (id,org_id,name) VALUES ('other_aura','other_org','Other organization');");
@@ -20,12 +20,18 @@ export function setup(t) {
     async run() { const result = sql.prepare(query).run(...values); return { success:true, meta:{ changes:Number(result.changes) } }; },
   });
   const objects = new Map();
+  let batches = Promise.resolve();
   const env = {
     DEMO_ORG_ID: ORG, TEST_MODE:'true',
-    DB: { prepare, async batch(statements) {
-      sql.exec('BEGIN');
-      try { const results=[]; for (const s of statements) results.push(await s.run()); sql.exec('COMMIT'); return results; }
-      catch (e) { sql.exec('ROLLBACK'); throw e; }
+    // D1 runs each batch as one transaction, so concurrent batches take turns here too.
+    DB: { prepare, batch(statements) {
+      const run = batches.then(async () => {
+        sql.exec('BEGIN');
+        try { const results=[]; for (const s of statements) results.push(await s.run()); sql.exec('COMMIT'); return results; }
+        catch (e) { sql.exec('ROLLBACK'); throw e; }
+      });
+      batches = run.catch(() => undefined);
+      return run;
     } },
     MAIL: {
       async put(key,value) { objects.set(key,new Uint8Array(typeof value==='string' ? new TextEncoder().encode(value) : value)); },
