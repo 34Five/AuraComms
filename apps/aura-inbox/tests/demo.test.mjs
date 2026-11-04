@@ -113,3 +113,81 @@ test('a thread with no inbound mail names its To recipient and never a Bcc', asy
   const { threads } = await (await x.request('/api/auras/aura_demo_merlin/inbox')).json();
   assert.equal(threads[0].sender, 'pat@example.invalid');
 });
+
+const provisionAnthony = readFileSync(new URL('../scripts/provision-anthony.sql', import.meta.url), 'utf8');
+const ANTHONY = 'anthony@34five.studio';
+
+async function generated(t, x) {
+  const world = merlin(t, x);
+  x.sql.exec(provisionAnthony);
+  const response = await x.request('/api/auras/aura_demo_anthony/address', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+  assert.equal(response.status, 201);
+  return world;
+}
+const rows = (x, aura) => x.sql.prepare('SELECT direction,status FROM email_messages WHERE aura_id=? ORDER BY direction').all(aura).map(r => [r.direction, r.status]);
+
+test('in llm mode an address made by Generate email gets a reply from that address', async t => {
+  const x = setup(t), { demo, reply } = await generated(t, x);
+  reply('Thanks for writing in.\n\nAnthony');
+  await receive(demo.message(ANTHONY), x.env);
+  assert.equal(demo.replies.length, 1);
+  assert.equal(demo.replies[0].from.email, ANTHONY);
+  assert.equal(demo.replies[0].from.name, 'Anthony');
+  assert.deepEqual(rows(x, 'aura_demo_anthony'), [['in', 'received'], ['out', 'sent']]);
+});
+
+test('in fixed mode a generated address and Merlin are stored and get no reply', async t => {
+  const x = setup(t), { demo } = await generated(t, x);
+  x.env.AUTO_REPLY_MODE = 'fixed';
+  await receive(demo.message(ANTHONY, 'fixed-anthony@example.invalid'), x.env);
+  await receive(demo.message(MERLIN, 'fixed-merlin@example.invalid'), x.env);
+  assert.equal(demo.replies.length, 0);
+  assert.deepEqual(rows(x, 'aura_demo_anthony'), [['in', 'received']]);
+  assert.deepEqual(rows(x, 'aura_demo_merlin'), [['in', 'received']]);
+});
+
+test('in llm mode the two fixed test addresses still reply', async t => {
+  const x = setup(t), { demo, reply } = merlin(t, x);
+  reply('Thanks for writing in.');
+  await receive(demo.message('support-test@34five.studio'), x.env);
+  assert.equal(demo.replies.length, 1);
+  assert.equal(demo.replies[0].from.email, 'support-test@34five.studio');
+});
+
+for (const [label, prepare] of [
+  ['unknown', () => {}],
+  ['disabled', x => {
+    x.sql.exec("UPDATE email_address_assignments SET ended_at=strftime('%Y-%m-%dT%H:%M:%fZ','now','+1 second') WHERE address_id='address_merlin'");
+    x.sql.exec("UPDATE email_addresses SET status='disabled',disabled_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id='address_merlin'");
+  }],
+]) {
+  test(`in llm mode a ${label} address is refused with no reply and no provider call`, async t => {
+    const x = setup(t), { demo } = merlin(t, x);
+    let calls = 0;
+    globalThis.fetch = async () => { calls++; return new Response('{}', { status: 500 }); };
+    prepare(x);
+    const message = demo.message(label === 'unknown' ? 'nobody@34five.studio' : MERLIN);
+    await receive(message, x.env);
+    assert.match(message.rejected ?? '', /./);
+    assert.equal(demo.replies.length, 0);
+    assert.equal(calls, 0);
+    assert.deepEqual(rows(x, 'aura_demo_merlin'), []);
+  });
+}
+
+test('in llm mode mail from any address we own is stored and gets no reply, so Auras cannot loop', async t => {
+  const x = setup(t), { demo } = await generated(t, x);
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return new Response('{}', { status: 500 }); };
+  const fromAura = demo.message(MERLIN, 'aura-to-aura@example.invalid');
+  fromAura.from = ANTHONY.toUpperCase();
+  await receive(fromAura, x.env);
+  const fromRetired = demo.message(ANTHONY, 'retired@example.invalid');
+  x.sql.exec("INSERT INTO email_addresses (id,org_id,domain_id,local_part,address,address_key,status,disabled_at) SELECT 'old_addr','org_demo_001',id,'old','old@34five.studio','old@34five.studio','disabled',strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM email_domains WHERE domain_key='34five.studio'");
+  fromRetired.from = 'old@34five.studio';
+  await receive(fromRetired, x.env);
+  assert.equal(demo.replies.length, 0);
+  assert.equal(calls, 0);
+  assert.deepEqual(rows(x, 'aura_demo_merlin'), [['in', 'received']]);
+  assert.deepEqual(rows(x, 'aura_demo_anthony'), [['in', 'received']]);
+});
