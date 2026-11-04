@@ -248,6 +248,15 @@ test('the system rules forbid revealing configuration and including links or HTM
   assert.match(system, /Do not include links, HTML, or attachments/);
 });
 
+test('the system rules stop invented features, listed topics, and credential requests', () => {
+  const { system } = buildReplyPrompt(AURA, thread, { attachmentCount: 0 });
+  for (const rule of [
+    'Do not invent prices, commitments, features, integrations, or facts you have not been given.',
+    'Decline only what was asked. Never list the other topics you cannot discuss.',
+    'Do not ask for passwords or account credentials.',
+  ]) assert.ok(system.includes(rule), rule);
+});
+
 test('the thread budget drops the oldest messages and keeps the latest inbound whole', () => {
   const long = (direction, label) => ({ direction, sender: 'a@example.invalid', subject: 's', text: `${label} ${'z'.repeat(7900)}` });
   const { user } = buildReplyPrompt(AURA, ['M1','M2','M3','M4','M5'].map(label => long('in', label)), { attachmentCount: 0 });
@@ -325,6 +334,10 @@ test('ordinary characters survive cleanup', () => {
   const text = 'Use snake_case_name and 2 * 3 = 6. Email a_b@example.com.';
   assert.equal(finalizeReply(text, { truncated: false }), text);
   assert.equal(finalizeReply('Subject matter experts can help.', { truncated: false }), 'Subject matter experts can help.');
+});
+
+test('trailing spaces are trimmed from every line', () => {
+  assert.equal(finalizeReply('Hello there. \nSecond line.  \t\n\nEnd.  ', { truncated: false }), 'Hello there.\nSecond line.\n\nEnd.');
 });
 
 test('the 2000 character cap cuts at a sentence boundary', () => {
@@ -456,6 +469,8 @@ test('follow-ups send prior inbound and sent replies, with no failed rows and no
     VALUES ('failed_row',?,?,?,?,?,'out','failed','failed-key',?,'NEVER SHOW THIS',15,?)`)
     .run(outgoing.org_id, outgoing.aura_id, outgoing.thread_id, outgoing.email_address_id, outgoing.address_assignment_id, outgoing.from_address, outgoing.activity_at);
   result = respond(gemini('Second reply.\n\nSales Aura'));
+  // Rows in the same millisecond sort by id, and real mail always has a provider call between them.
+  await new Promise(resolve => setTimeout(resolve, 5));
   await receive(demo.message(undefined, 'followup@example.invalid', 'In-Reply-To: <out-1@cloudflare.example>\r\nReferences: <reply-test@example.invalid> <out-1@cloudflare.example>\r\n', 'Follow-up question.\n\nOn Monday, Sales Aura wrote:\n\n> QUOTED HISTORY'), x.env);
   const prompt = calls[1].body.contents[0].parts[0].text;
   for (const text of ['A new test message.', 'First reply.', 'Follow-up question.']) assert.ok(prompt.includes(text), text);
@@ -631,6 +646,41 @@ test('a body-less sending row reads as timed out only after 120 seconds, with no
   assert.equal(x.sql.prepare('SELECT status FROM email_messages WHERE id=?').get(row.id).status, 'sending');
   x.sql.exec(`UPDATE email_messages SET body_text='Sent with an unknown outcome',body_size_bytes=28 WHERE id='${row.id}'`);
   assert.equal(await state(), null, 'a row with a body is an unknown send, not a stalled generation');
+});
+
+// Live aura shape
+
+function liveAuraShape(x) {
+  for (const { name } of x.sql.prepare('PRAGMA table_info(auras)').all()) {
+    if (!['id', 'org_id', 'name'].includes(name)) x.sql.exec(`ALTER TABLE auras DROP COLUMN ${name}`);
+  }
+  assert.deepEqual(x.sql.prepare('PRAGMA table_info(auras)').all().map(c => c.name).sort(), ['id', 'name', 'org_id']);
+}
+
+test('the live three-column auras table still produces a reply from the name alone', async t => {
+  const x = setup(t), demo = llmMode(x);
+  liveAuraShape(x);
+  const calls = mockFetch(t, () => respond(gemini('Hello.\n\nSales Aura')));
+  await receive(demo.message(), x.env);
+  assert.equal(demo.replies.length, 1);
+  assert.equal(x.sql.prepare("SELECT status FROM email_messages WHERE org_id='org_demo_001' AND direction='out'").get().status, 'sent');
+  const system = calls[0].body.systemInstruction.parts[0].text;
+  assert.ok(system.includes('Sales Aura'));
+  assert.ok(!/Role:|Facet:|Personality:|refuse|null|undefined/.test(system));
+  assert.match(calls[0].url, /models\/gemini-test:generateContent/);
+});
+
+test('blank config values on the row are omitted, not substituted', async t => {
+  const x = setup(t), demo = llmMode(x);
+  x.sql.exec(`UPDATE auras SET role='   ', facet='', personality=NULL, blocklist='[]' WHERE id='aura_demo_002'`);
+  const calls = mockFetch(t, () => respond(gemini('Hello.')));
+  await receive(demo.message(), x.env);
+  assert.ok(!/Role:|Facet:|Personality:|refuse/.test(calls[0].body.systemInstruction.parts[0].text));
+});
+
+test('the prompt adds no tone or sales behaviour of its own', () => {
+  const { system, user } = buildReplyPrompt({ name: 'Sales Aura', role: null, facet: null, personality: null, blocklist: null }, thread, { attachmentCount: 0 });
+  assert.ok(!/qualifying|offer a call|warm|friendly|concise|curious|polite/i.test(`${system}\n${user}`));
 });
 
 // Cost caps
