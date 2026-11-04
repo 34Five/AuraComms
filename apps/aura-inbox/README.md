@@ -1,10 +1,10 @@
 # Aura inbox test
 
-A read-only inbox for each Aura, with real incoming email. One Cloudflare Worker serves the React/Vite UI and `/api` endpoints. The only writes are generating an address for an Aura and retrying its provisioning.
+A read-only inbox for each Aura, with real incoming email. One Cloudflare Worker serves the React/Vite UI and `/api` endpoints. Inbox data is read-only. The only writes are sign-in, generating an address for an Aura, and retrying its provisioning.
 
-This is a test deployment. Only invited people can see inbox data, and they sign in with a code sent by email (see [Sign-in](#sign-in)). This is temporary, until Access or Studio login replaces it. Every invited person sees every Aura: `DEMO_ORG_ID` limits all queries and inbound routing to `org_demo_001`, and there is no member or Aura authorization. Use test messages only, and add that authorization before using customer data.
+On the demo Worker, only invited people can see inbox data, and they sign in with a code sent by email (see [Sign-in](#sign-in)). This is temporary, until Access or Studio login replaces it. Every invited person sees every Aura: `DEMO_ORG_ID` limits all queries and inbound routing to `org_demo_001`, and there is no member or Aura authorization. Use test messages only, and add that authorization before using customer data.
 
-Deployed at https://aura-inbox-test.cassius-kellogg.workers.dev. The API uses the same origin under `/api`.
+**The older `aura-inbox-test` Worker has no login.** It runs code deployed before sign-in, at https://aura-inbox-test.cassius-kellogg.workers.dev, on the same D1 and R2. Anyone with that URL can read the same demo mail until its workers.dev route is turned off (see the runbook). The API uses the same origin under `/api`.
 
 ## Run locally
 
@@ -16,7 +16,7 @@ npm ci
 npm run check
 ```
 
-Start the Worker with `npm run dev:worker` and Vite in a second terminal with `npm run dev`. Vite proxies `/api` to port 8788. Local D1 and R2 are separate from Cloudflare.
+Start the Worker with `npm run dev:worker` and Vite in a second terminal with `npm run dev`. Vite proxies `/api` to port 8788. Local D1 and R2 are separate from Cloudflare. To sign in locally, set a non-empty `SESSION_SECRET` in `.dev.vars`, apply `scripts/0004_demo_auth.sql` and `scripts/provision-invites.sql` to the local database, and read the code from the text file named in the Worker's `send_email` log line.
 
 The Worker expects the existing email schema. For a fresh local database, import the parent fixture, migration, and seed from the repository with `wrangler d1 execute DB --local --file PATH`. The supplied repository seed uses organization `e07_demo_org`. Override `DEMO_ORG_ID` locally to view that seed. The remote database uses Prajwal's `org_demo_001` seed. Do not import the local seed or parent fixture remotely.
 
@@ -47,7 +47,7 @@ Only addresses in `demo_auth_invites` can sign in. Anyone else sees "This addres
 | `POST /api/auth/signout` | Revokes the session on the server and clears the cookie |
 | `GET /api/auth/me` | `{email}`, or 401 |
 
-A code lasts 10 minutes and works once, and only the newest one works. Three requests per email per 10 minutes are allowed. Five wrong codes lock that email for 15 minutes, and anyone who knows an invited address can trigger that lock. Sessions last 7 days.
+A code lasts 10 minutes and works once, and only the newest one works. Three requests per email per 10 minutes are allowed. Five wrong codes lock that email for 15 minutes. The count clears only on a successful sign-in or when a lock ends, so old typos still count. Anyone who knows an invited address can trigger that lock, use up its code requests, or replace its newest code. Sessions last 7 days.
 
 `SESSION_SECRET` signs cookies and keys the stored code hashes. Without it, every `/api` route except `/api/health` returns 503. Rotating it invalidates pending codes and all sessions, so everyone signs in again. Inbound mail never depends on it.
 
@@ -206,6 +206,12 @@ npx wrangler d1 execute DB --remote --file ../../scripts/0004_demo_auth.sql
 npx wrangler d1 execute DB --remote --file scripts/provision-invites.sql
 openssl rand -hex 32 | npx wrangler secret put SESSION_SECRET --env demo
 npm run build && npx wrangler deploy --env demo
+```
+
+**Turn off public access to the old Worker.** In the dashboard, open Workers → `aura-inbox-test` → Settings → Domains & Routes and disable the workers.dev route. Without this, the demo mail stays readable there with no login. Then check that this returns no data:
+
+```sh
+curl -i https://aura-inbox-test.cassius-kellogg.workers.dev/api/auras
 ```
 
 **4. Set the secrets, if the token is ready.** Each command prompts for the value. The zone ID for `34five.studio` is `1c60311626bbfe94b6fe3496d15de727`. Skip this step to demo the pending state.

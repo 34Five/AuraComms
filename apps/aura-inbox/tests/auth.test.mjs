@@ -154,6 +154,50 @@ test('concurrent wrong guesses cannot exceed five', async t => {
   assert.equal((await verify(x, code)).status, 429);
 });
 
+test('a burst of guesses cannot reach the right code past the limit', async t => {
+  const x = invited(t);
+  await requestCode(x);
+  const code = latestCode(x);
+  const guesses = [...Array.from({ length: 12 }, () => wrong(code)), code];
+  const responses = await Promise.all(guesses.map(guess => verify(x, guess)));
+  assert.equal(responses.at(-1).status, 429);
+  assert.equal(x.sql.prepare('SELECT COUNT(*) AS n FROM demo_auth_sessions').get().n, 0);
+});
+
+test('guessing during a lock does not extend it', async t => {
+  const x = invited(t);
+  await requestCode(x);
+  const code = latestCode(x);
+  for (let i = 0; i < 5; i++) await verify(x, wrong(code));
+  const until = new Date(Date.now() + 60_000).toISOString();
+  x.sql.exec(`UPDATE demo_auth_throttle SET locked_until='${until}'`);
+  assert.equal((await verify(x, wrong(code))).status, 429);
+  assert.equal(x.sql.prepare('SELECT locked_until FROM demo_auth_throttle').get().locked_until, until);
+});
+
+test('codes keep leading zeros, and draws that would bias the code are redrawn', async t => {
+  const x = invited(t);
+  const real = crypto.getRandomValues.bind(crypto);
+  const draws = [4_294_967_295, 42];
+  t.mock.method(crypto, 'getRandomValues', array => {
+    if (!(array instanceof Uint32Array)) return real(array);
+    array[0] = draws.shift();
+    return array;
+  });
+  await requestCode(x);
+  assert.equal(latestCode(x), '000042');
+  assert.equal((await verify(x, '000042')).status, 200);
+});
+
+test('a failed send leaves the earlier code usable', async t => {
+  const x = invited(t);
+  await requestCode(x);
+  const code = latestCode(x);
+  x.failSend = true;
+  assert.equal((await requestCode(x)).status, 502);
+  assert.equal((await verify(x, code)).status, 200);
+});
+
 test('a badly formed code is refused without spending an attempt', async t => {
   const x = invited(t);
   await requestCode(x);
@@ -411,11 +455,25 @@ test('removing an invite locks out its live session', async t => {
   assert.equal(x.sql.prepare('SELECT COUNT(*) AS n FROM demo_auth_sessions WHERE email=?').get(INVITED).n, 0);
 });
 
+test('a session is refused once its invite is gone, even if the row survives', async t => {
+  const x = invited(t);
+  const cookie = await signIn(x);
+  x.sql.exec('PRAGMA foreign_keys=OFF');
+  x.sql.prepare('DELETE FROM demo_auth_invites WHERE email=?').run(INVITED);
+  assert.equal(x.sql.prepare('SELECT COUNT(*) AS n FROM demo_auth_sessions WHERE email=?').get(INVITED).n, 1);
+  assert.equal((await x.anon('/api/auras', { headers: { cookie } })).status, 401);
+});
+
 test('a database failure during the session check is a 500 with no data', async t => {
   const x = invited(t);
   const cookie = await signIn(x);
   t.mock.method(console, 'error', () => {});
-  x.env.DB.prepare = () => { throw new Error('D1 is down'); };
+  // Only the session lookup fails, so a gate that failed open would reach the data query and return 200.
+  const prepare = x.env.DB.prepare;
+  x.env.DB.prepare = query => {
+    if (query.includes('demo_auth_sessions')) throw new Error('D1 is down');
+    return prepare(query);
+  };
   const response = await x.anon('/api/auras', { headers: { cookie } });
   assert.equal(response.status, 500);
   assert.deepEqual(await response.json(), { error: 'The inbox request failed. Please retry.' });

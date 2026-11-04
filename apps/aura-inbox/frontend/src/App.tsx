@@ -300,7 +300,8 @@ function Inbox({ email, onSignOut }: { email: string; onSignOut: () => void }) {
       <header className="topbar">
         <div className="topbar-title"><h1>{aura?.name.replace(/ Aura$/,'') || 'Your'} inbox</h1><p>{liveAddress ? <>Receiving at <span className="mail-address">{liveAddress}</span></> : 'Select an Aura to view its conversations.'}</p></div>
         <div className="search"><Icon name="search" size={16}/><input aria-label="Search conversations" placeholder="Search subject or sender" value={search} onChange={e => setSearch(e.target.value)}/>{search && <button aria-label="Clear search" onClick={() => setSearch('')}>×</button>}</div>
-        <div className="topbar-right"><span className="read-only">Read-only</span><button className="refresh-button" onClick={() => setRefreshKey(n => n+1)}><Icon name="refresh" size={15}/>Refresh</button><div className="signed-in"><span>Signed in as {email}</span><button className="refresh-button" onClick={signOut}>Sign out</button>{signOutError && <p className="inline-error" role="alert">{signOutError}</p>}</div></div>
+        <div className="topbar-right"><span className="read-only">Read-only</span><button className="refresh-button" onClick={() => setRefreshKey(n => n+1)}><Icon name="refresh" size={15}/>Refresh</button></div>
+        <div className="signed-in"><span>Signed in as {email}</span><button className="sign-out" onClick={signOut}>Sign out</button>{signOutError && <p className="inline-error" role="alert">{signOutError}</p>}</div>
       </header>
       <div className="inbox-layout">
         <section className="thread-panel" aria-label="Conversations">
