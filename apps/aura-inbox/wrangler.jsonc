@@ -27,6 +27,8 @@
   "env": {
     "demo": {
       "name": "aura-inbox-demo",
+      "workers_dev": false,
+      "routes": [{ "pattern": "inbox-demo.34five.studio", "custom_domain": true }],
       "vars": {
         "DEMO_ORG_ID": "org_demo_001", "TEST_MODE": "true", "AUTO_REPLY_ENABLED": "true",
         "AUTO_REPLY_MODE": "llm", "DEFAULT_LLM_MODEL": "gemini:gemini-3.5-flash-lite",
