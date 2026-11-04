@@ -73,7 +73,9 @@ npm run llm:smoke -- "hello"
 npm run llm:smoke -- --model anthropic:claude-sonnet-4-5 "hello"
 ```
 
-The prompt uses the Aura's name, role, facet, personality, and blocklist (topics to refuse), plus the thread's received and sent messages with quoted history removed. HTML-only mail is converted to text. A thread is limited to 24000 characters: the oldest messages drop first, and the email being answered is always kept. Thread content is wrapped as untrusted data. Attachments are not read: the reply acknowledges them and sends no file back.
+The prompt uses the Aura's name, any role, facet, personality, and blocklist (topics to decline) on its row, plus the thread's received and sent messages with quoted history removed. HTML-only mail is converted to text. A thread is limited to 24000 characters: the oldest messages drop first, and the email being answered is always kept. Thread content is wrapped as untrusted data. Attachments are not read: the reply acknowledges them and sends no file back.
+
+The demo uses a neutral system instruction plus whatever config the Aura's row holds. Empty fields are left out, and nothing here adds a voice or tone. The bound `auras` table currently has only `id`, `org_id`, and `name`, so replies use the Aura's name and the email rules alone. The authoritative source for Aura configuration is to be agreed with 34Five (AXI-24).
 
 Replies are capped at 1024 output tokens and 2000 characters at a sentence boundary. A reply cut off by the token limit is still sent, trimmed to its last complete sentence.
 
@@ -82,6 +84,8 @@ If the provider fails, times out after 20 seconds, returns nothing, or blocks th
 Each generated reply costs a provider call, and these addresses are public. `LLM_SENDER_HOURLY_CAP` (default 10, rolling hour, per sender) and `LLM_AURA_DAILY_CAP` (default 200, UTC day, per Aura) limit them. Every attempt counts, including failed ones. Over a cap, the handler makes no call, sends nothing, creates no reply row, and logs `inbox_llm_reply_skipped`.
 
 ## Deploy and provision
+
+**Do not deploy `spikes/cf-email` over the live Worker until the live source is merged in.** The live Worker has code and config that are not in this repository, and deploying from here would drop the `env.GOVERNANCE` Durable Object binding and its `GovernanceCoordinator` class.
 
 The Wrangler configuration binds `development_replica` and private R2 bucket `aura-inbox-test-mail`.
 

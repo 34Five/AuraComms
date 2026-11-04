@@ -2,7 +2,7 @@ import type { Email } from 'postal-mime';
 import type { Env } from './types.ts';
 import { messageIds } from './utils.ts';
 import { LlmError, failureClass, safeDetail } from './llm/http.ts';
-import { buildReplyPrompt, finalizeReply, loadThread, type AuraConfig } from './llm/prompt.ts';
+import { auraConfig, buildReplyPrompt, finalizeReply, loadThread } from './llm/prompt.ts';
 import { createProvider, resolveModel, type ModelRef } from './llm/provider.ts';
 
 const ADDRESSES = new Set(['support-test@34five.studio', 'sales-test@34five.studio']);
@@ -136,10 +136,11 @@ export async function autoReply(message: ForwardableEmailMessage, env: Env, pars
   if (useLlm) {
     let model: ModelRef | null = null;
     try {
-      const aura = await env.DB.prepare('SELECT name,llm_id,facet,personality,role,blocklist FROM auras WHERE org_id=? AND id=?')
-        .bind(context.org_id,context.aura_id).first<AuraConfig & { llm_id: string | null }>();
-      if (!aura) throw new LlmError('E_LLM_CONFIG','The Aura row is missing.');
-      model = resolveModel(aura.llm_id,env.DEFAULT_LLM_MODEL);
+      const row = await env.DB.prepare('SELECT * FROM auras WHERE org_id=? AND id=?')
+        .bind(context.org_id,context.aura_id).first<Record<string, unknown>>();
+      if (!row) throw new LlmError('E_LLM_CONFIG','The Aura row is missing.');
+      model = resolveModel(row.llm_id ?? null,env.DEFAULT_LLM_MODEL);
+      const aura = auraConfig(row);
       const provider = createProvider(model,env);
       const thread = await loadThread(env,context);
       const attachmentCount = parsed.attachments.filter(a => a.disposition !== 'inline').length;
