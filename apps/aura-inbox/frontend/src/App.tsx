@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import DOMPurify from 'dompurify';
 import { addressChip, isReceiving } from './address-state.ts';
 import { messageState } from './message-state.ts';
+import { sessionFrom, type Session } from './auth-state.ts';
+import { SignIn, SignInFrame } from './SignIn.tsx';
 import { fragmentToText, splitQuotedText } from './quoted-text.ts';
 
 type AuraAddress = { address: string; status: string; domain_status: string; provisioning_status: string };
@@ -32,14 +34,19 @@ function Icon({ name, size = 20 }: { name: string; size?: number }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name] || paths.mail}/></svg>;
 }
 
+// Set while App is mounted. Any 401 means the session ended, so App goes back to the sign-in screen.
+let onUnauthorized = () => {};
+
 async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
   const response = await fetch(path, { signal, cache: 'no-store' });
+  if (response.status === 401) onUnauthorized();
   const data = await response.json() as T & { error?: string };
   if (!response.ok) throw new Error(data.error || 'Unable to load your inbox.');
   return data;
 }
 async function post<T>(path: string, body: object = {}): Promise<T> {
   const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (response.status === 401) onUnauthorized();
   const data = await response.json() as T & { error?: string };
   if (!response.ok) throw new Error(data.error || 'The request failed. Please retry.');
   return data;
@@ -153,7 +160,8 @@ function AddressPanel({ aura, onAddress }: { aura: Aura; onAddress: (auraId: str
   </div>;
 }
 
-export function App() {
+function Inbox({ email, onSignOut }: { email: string; onSignOut: () => void }) {
+  const [signOutError,setSignOutError] = useState('');
   const [auras,setAuras] = useState<Aura[]>([]);
   const [auraId,setAuraId] = useState(new URLSearchParams(location.search).get('aura') || '');
   const [threadId,setThreadId] = useState('');
@@ -272,6 +280,13 @@ export function App() {
     } catch (e) { if (generation === messageGeneration.current) setMessageError((e as Error).message); }
   };
 
+  // A failed sign-out leaves the session live, so the inbox stays open and says so.
+  const signOut = async () => {
+    setSignOutError('');
+    try { await post('/api/auth/signout'); onSignOut(); }
+    catch (e) { setSignOutError((e as Error).message); }
+  };
+
   return <div className={`app ${threadId ? 'has-conversation' : ''}`}>
     <aside className="sidebar">
       <a href="/" className="brand">34Five<small>Aura inbox</small></a>
@@ -279,13 +294,13 @@ export function App() {
       <nav className="aura-nav" aria-label="Aura inboxes">{auras.map((a,index) => <div key={a.id} className="aura-card"><button className={`aura-button ${a.id === auraId ? 'active' : ''}`} onClick={() => { setAuraId(a.id); setThreadId(''); setSearch(''); setStatus(''); }} aria-current={a.id === auraId ? 'page' : undefined}>
         <span className={`aura-avatar tone-${index%3}`}>{initials(a.name.replace(' Aura',''))}</span><span className="aura-label"><strong>{a.name.replace(/ Aura$/,'')}</strong></span><span className="aura-count">{a.thread_count}</span>
       </button><AddressPanel aura={a} onAddress={showAddress}/></div>)}</nav>
-      <div className="test-note"><strong>Test workspace</strong> Public access. Use test messages only.</div>
+      <div className="test-note"><strong>Test workspace</strong> Invited users only. Use test messages only.</div>
     </aside>
     <main className="main">
       <header className="topbar">
         <div className="topbar-title"><h1>{aura?.name.replace(/ Aura$/,'') || 'Your'} inbox</h1><p>{liveAddress ? <>Receiving at <span className="mail-address">{liveAddress}</span></> : 'Select an Aura to view its conversations.'}</p></div>
         <div className="search"><Icon name="search" size={16}/><input aria-label="Search conversations" placeholder="Search subject or sender" value={search} onChange={e => setSearch(e.target.value)}/>{search && <button aria-label="Clear search" onClick={() => setSearch('')}>×</button>}</div>
-        <div className="topbar-right"><span className="read-only">Read-only</span><button className="refresh-button" onClick={() => setRefreshKey(n => n+1)}><Icon name="refresh" size={15}/>Refresh</button></div>
+        <div className="topbar-right"><span className="read-only">Read-only</span><button className="refresh-button" onClick={() => setRefreshKey(n => n+1)}><Icon name="refresh" size={15}/>Refresh</button><div className="signed-in"><span>Signed in as {email}</span><button className="refresh-button" onClick={signOut}>Sign out</button>{signOutError && <p className="inline-error" role="alert">{signOutError}</p>}</div></div>
       </header>
       <div className="inbox-layout">
         <section className="thread-panel" aria-label="Conversations">
@@ -304,4 +319,20 @@ export function App() {
       </div>
     </main>
   </div>;
+}
+
+export function App() {
+  const [session,setSession] = useState<Session | null>(null);
+  useEffect(() => {
+    onUnauthorized = () => setSession({ state: 'signed-out' });
+    const controller = new AbortController();
+    fetch('/api/auth/me',{ signal: controller.signal, cache: 'no-store' })
+      .then(async response => setSession(sessionFrom(response.status,await response.json().catch(() => null) as { email?: unknown } | null)))
+      .catch(e => { if ((e as Error).name !== 'AbortError') setSession({ state: 'unavailable' }); });
+    return () => { controller.abort(); onUnauthorized = () => {}; };
+  },[]);
+  if (!session) return null;
+  if (session.state === 'unavailable') return <SignInFrame><h1>Sign-in is unavailable right now.</h1></SignInFrame>;
+  if (session.state === 'signed-out') return <SignIn onSignedIn={email => setSession({ state: 'signed-in', email })}/>;
+  return <Inbox email={session.email} onSignOut={() => setSession({ state: 'signed-out' })}/>;
 }

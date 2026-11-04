@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import worker from '../worker/index.ts';
+import { sessionFrom } from '../frontend/src/auth-state.ts';
 import { enableReplies, setup } from './harness.mjs';
 
 const SENDER = 'no-reply@34five.studio';
@@ -433,4 +434,12 @@ test('inbound mail still stores and replies with the gate on and no secret', asy
   assert.equal(demo.replies.length, 1);
   const rows = x.sql.prepare("SELECT direction,status FROM email_messages WHERE aura_id='aura_demo_002' AND thread_id IN (SELECT thread_id FROM email_messages WHERE rfc_message_id='gate-on@example.invalid') ORDER BY direction").all();
   assert.deepEqual(rows.map(r => [r.direction, r.status]), [['in', 'received'], ['out', 'sent']]);
+});
+
+test('the sign-in state follows /api/auth/me', () => {
+  assert.deepEqual(sessionFrom(200, { email: INVITED }), { state: 'signed-in', email: INVITED });
+  assert.deepEqual(sessionFrom(401, { error: 'Sign in to continue.' }), { state: 'signed-out' });
+  for (const [status, body] of [[503, { error: 'Sign-in is unavailable right now.' }], [500, null], [200, {}], [200, null], [200, { email: 42 }]]) {
+    assert.deepEqual(sessionFrom(status, body), { state: 'unavailable' }, String(status));
+  }
 });
