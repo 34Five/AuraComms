@@ -1,8 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { receive } from '../worker/inbound.ts';
 import { addressChip, isReceiving } from '../frontend/src/address-state.ts';
-import { email, ORG, SALES, setup } from './harness.mjs';
+import { email, enableReplies, ORG, SALES, setup } from './harness.mjs';
 
 const NEW = 'aura_new', ZONE = 'zone_from_env', TOKEN = 'secret-token-value';
 const STAMP = '2026-10-22T08:00:00.000Z';
@@ -416,4 +417,54 @@ test('only a fully provisioned address counts as receiving', () => {
   assert.equal(isReceiving({ ...live, provisioning_status: 'provisioning_pending' }), false);
   assert.equal(isReceiving({ ...live, provisioning_status: 'failed' }), false);
   assert.equal(isReceiving({ ...live, domain_status: 'failed', provisioning_status: 'active' }), false);
+});
+
+function demoOrg(t) {
+  const x = setup(t);
+  enableReplies(x);
+  return x;
+}
+const provisionAnthony = readFileSync(new URL('../scripts/provision-anthony.sql', import.meta.url), 'utf8');
+const anthonyRows = x => x.sql.prepare("SELECT id,org_id,name FROM auras WHERE id='aura_demo_anthony'").all().map(r => ({ ...r }));
+
+test('the Anthony script adds the Aura once, gives it no address and changes no existing row', t => {
+  const x = demoOrg(t);
+  const snapshot = () => ['auras', 'email_addresses', 'email_address_assignments', 'email_domains']
+    .map(table => x.sql.prepare(`SELECT * FROM ${table} WHERE id<>'aura_demo_anthony' ORDER BY id`).all());
+  const before = snapshot();
+  x.sql.exec(provisionAnthony); x.sql.exec(provisionAnthony);
+  assert.deepEqual(snapshot(), before);
+  assert.deepEqual(anthonyRows(x), [{ id: 'aura_demo_anthony', org_id: 'org_demo_001', name: 'Anthony' }]);
+  assert.equal(x.sql.prepare("SELECT COUNT(*) AS n FROM email_address_assignments WHERE aura_id='aura_demo_anthony'").get().n, 0);
+  assert.deepEqual(x.sql.prepare('PRAGMA foreign_key_check').all(), []);
+});
+
+test('generating for Anthony gives anthony@34five.studio', async t => {
+  const x = demoOrg(t);
+  x.sql.exec(provisionAnthony);
+  const response = await generate(x, {}, 'aura_demo_anthony');
+  assert.equal(response.status, 201);
+  assert.equal((await response.json()).address.address, 'anthony@34five.studio');
+});
+
+test('the Anthony script adds nothing when another Aura has that name', t => {
+  const x = demoOrg(t);
+  x.sql.exec("INSERT INTO auras (id,org_id,name) VALUES ('someone_else','org_demo_001','anthony')");
+  x.sql.exec(provisionAnthony);
+  assert.deepEqual(anthonyRows(x), []);
+});
+
+test('the Anthony script adds nothing when anthony@34five.studio is taken', t => {
+  const x = demoOrg(t);
+  x.sql.exec(`INSERT INTO email_addresses (id,org_id,domain_id,local_part,address,address_key)
+    SELECT 'taken','org_demo_001',id,'anthony','anthony@34five.studio','anthony@34five.studio' FROM email_domains WHERE domain_key='34five.studio'`);
+  x.sql.exec(provisionAnthony);
+  assert.deepEqual(anthonyRows(x), []);
+});
+
+test('the Anthony script adds nothing when the domain is not active', t => {
+  const x = demoOrg(t);
+  x.sql.prepare("UPDATE email_domains SET status='disabled',disabled_at=? WHERE domain_key='34five.studio'").run(STAMP);
+  x.sql.exec(provisionAnthony);
+  assert.deepEqual(anthonyRows(x), []);
 });

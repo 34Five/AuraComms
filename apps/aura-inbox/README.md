@@ -139,6 +139,53 @@ npx wrangler secret put CF_API_TOKEN --env demo
 npx wrangler secret put CF_ZONE_ID --env demo
 ```
 
+## Thursday demo runbook
+
+Run this after the AXI-23 PR that adds the `demo` environment has merged. Until then `--env demo` fails. Run everything from `apps/aura-inbox` on an up-to-date `spikes/cf-email`, after `npm ci`.
+
+**1. Add the provisioning table.** Do this before deploying, or `/api/auras` returns 500 on the new code.
+
+```sh
+npx wrangler d1 execute DB --remote --file ../../scripts/0003_email_address_provisioning.sql
+```
+
+**2. Add the Anthony Aura, then check it.** The check must return one row. No row means a guard stopped the insert: the domain is not active, another Aura has the name, or the address is taken.
+
+```sh
+npx wrangler d1 execute DB --remote --file scripts/provision-anthony.sql
+npx wrangler d1 execute DB --remote --command "SELECT id,org_id,name FROM auras WHERE id='aura_demo_anthony'"
+```
+
+**3. Deploy the demo Worker.** The deploy prints its URL.
+
+```sh
+npm run build && npx wrangler deploy --env demo
+```
+
+**4. Set the secrets, if the token is ready.** Each command prompts for the value. The zone ID for `34five.studio` is `1c60311626bbfe94b6fe3496d15de727`. Skip this step to demo the pending state.
+
+```sh
+npx wrangler secret put CF_API_TOKEN --env demo
+npx wrangler secret put CF_ZONE_ID --env demo
+```
+
+**5. Generate the address.** Open the demo URL. On Anthony's card, choose **Generate email**, check that it proposes `anthony@34five.studio`, then choose **Create address**.
+
+- With the secrets, the chip shows **Active** and the rule exists. Skip step 6.
+- Without them, the chip shows **Provisioning pending** with the rule to create.
+- **Failed** shows the reason. Fix the cause and choose **Retry**.
+
+**6. Without the secrets, create the rule by hand.** Do this after step 5, because mail to an address the database does not know is rejected. List the rules first and stop if one already matches this address.
+
+```sh
+npx wrangler email routing rules list 34five.studio
+npx wrangler email routing rules create 34five.studio --name "AuraComms anthony@34five.studio" --match-type literal --match-field to --match-value anthony@34five.studio --action-type worker --action-value aura-inbox-demo
+```
+
+The chip stays on **Provisioning pending** because the Worker cannot see this rule. Mail still flows. If the secrets are set later, **Retry** finds the rule and the chip shows **Active**.
+
+**7. Send a real test email to `anthony@34five.studio`.** It should appear in Anthony's inbox within five seconds, and a reply should come back from that address. This is the first real test of a reply from a generated address. If the thread shows **Reply failed**, report that as a finding: inbound mail still counts as working.
+
 ## Verification on November 2, 2026
 
 - 31 inbox/reply and quote-parser tests passed, including SQLite with the real schema, foreign keys, and MIME parser.
