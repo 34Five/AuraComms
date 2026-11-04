@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import worker from '../worker/index.ts';
-import { sessionFrom } from '../frontend/src/auth-state.ts';
+import { opensCodeStepOnFailure, sessionFrom } from '../frontend/src/auth-state.ts';
 import { enableReplies, setup } from './harness.mjs';
 
 const SENDER = 'no-reply@34five.studio';
@@ -497,7 +497,75 @@ test('inbound mail still stores and replies with the gate on and no secret', asy
 test('the sign-in state follows /api/auth/me', () => {
   assert.deepEqual(sessionFrom(200, { email: INVITED }), { state: 'signed-in', email: INVITED });
   assert.deepEqual(sessionFrom(401, { error: 'Sign in to continue.' }), { state: 'signed-out' });
-  for (const [status, body] of [[503, { error: 'Sign-in is unavailable right now.' }], [500, null], [200, {}], [200, null], [200, { email: 42 }]]) {
-    assert.deepEqual(sessionFrom(status, body), { state: 'unavailable' }, String(status));
+  assert.deepEqual(sessionFrom(503, { error: 'Sign-in is unavailable right now.' }), { state: 'unavailable' });
+});
+
+test('a blip on /api/auth/me falls back to the sign-in form, not a dead end', () => {
+  for (const [status, body] of [[null, null], [500, null], [502, null], [200, {}], [200, null], [200, { email: 42 }]]) {
+    assert.deepEqual(sessionFrom(status, body), { state: 'signed-out' }, String(status));
   }
+});
+
+test('only a 429 on a code request moves on to the code step', () => {
+  assert.equal(opensCodeStepOnFailure(429), true);
+  for (const status of [null, 403, 415, 500, 502, 503]) assert.equal(opensCodeStepOnFailure(status), false, String(status));
+});
+
+test('a 429 on a code request leaves the earlier code usable', async t => {
+  const x = invited(t);
+  for (let i = 0; i < 3; i++) await requestCode(x);
+  const code = latestCode(x);
+  assert.equal((await requestCode(x)).status, 429);
+  assert.equal((await verify(x, code)).status, 200);
+});
+
+test('a code request clears only that email\'s codes that are finished and outside the request window', async t => {
+  const x = invited(t);
+  x.sql.exec("INSERT INTO demo_auth_invites (email,invited_by,invited_at) VALUES ('sam@example.invalid','test','2026-11-04T00:00:00.000Z')");
+  const ago = minutes => new Date(Date.now() - minutes * 60_000).toISOString();
+  const later = new Date(Date.now() + 60_000).toISOString();
+  const add = (id, email, created, expires, consumed) => x.sql.prepare('INSERT INTO demo_auth_codes (id,email,code_hash,created_at,expires_at,consumed_at) VALUES (?,?,?,?,?,?)')
+    .run(id, email, 'hash', created, expires, consumed);
+  add('old_expired', INVITED, ago(30), ago(20), null);
+  add('old_consumed', INVITED, ago(11), later, ago(10));
+  add('recent_consumed', INVITED, ago(1), later, ago(1));
+  add('old_live', INVITED, ago(11), later, null);
+  add('other_email', 'sam@example.invalid', ago(30), ago(20), null);
+  assert.equal((await requestCode(x)).status, 200);
+  const ids = x.sql.prepare("SELECT id FROM demo_auth_codes WHERE id NOT LIKE '%-%' ORDER BY id").all().map(r => r.id);
+  assert.deepEqual(ids, ['old_live', 'other_email', 'recent_consumed']);
+});
+
+test('recently used codes still count against the request limit after cleanup', async t => {
+  const x = invited(t);
+  await signIn(x);
+  await signIn(x);
+  await signIn(x);
+  assert.equal((await requestCode(x)).status, 429);
+});
+
+test('a new session clears expired and revoked sessions and keeps live ones', async t => {
+  const x = invited(t);
+  const live = await signIn(x);
+  const later = new Date(Date.now() + 60_000).toISOString();
+  const add = (id, expires, revoked) => x.sql.prepare("INSERT INTO demo_auth_sessions (id,email,created_at,expires_at,revoked_at) VALUES (?,?,'2026-11-04T00:00:00.000Z',?,?)").run(id, INVITED, expires, revoked);
+  add('s_expired', past(), null);
+  add('s_revoked', later, past());
+  add('s_live', later, null);
+  await signIn(x);
+  const ids = x.sql.prepare("SELECT id FROM demo_auth_sessions WHERE id LIKE 's\\_%' ESCAPE '\\' ORDER BY id").all().map(r => r.id);
+  assert.deepEqual(ids, ['s_live']);
+  assert.equal((await me(x, live)).status, 200);
+});
+
+test('the signing key is imported once per secret, and rotating the secret refuses old cookies', async t => {
+  const x = invited(t);
+  x.env.SESSION_SECRET = 'key-cache-test-secret';
+  const cookie = await signIn(x);
+  const imports = t.mock.method(crypto.subtle, 'importKey');
+  for (let i = 0; i < 3; i++) assert.equal((await me(x, cookie)).status, 200);
+  assert.equal(imports.mock.callCount(), 0);
+  x.env.SESSION_SECRET = 'key-cache-test-rotated';
+  assert.equal((await me(x, cookie)).status, 401);
+  assert.equal(imports.mock.callCount(), 1);
 });

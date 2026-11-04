@@ -102,7 +102,7 @@ Responses:
 Algorithms the tests do not fully determine:
 
 - Request: normalise with `trim().toLowerCase()`, reject over 254 characters as not invited, read the invite row, check the lock, then `INSERT ... SELECT ... WHERE (SELECT COUNT(*) ... created_at >= now-10m) < 3` so the limit is atomic. `changes === 0` means 429. Send to the email from the invite row. If the send throws, delete the new row and return 502.
-- Verify: not invited, or a code that is not 6 digits after removing spaces, returns 401 with no write. Delete an expired lock row. Then charge first: upsert `failed_attempts + 1`, setting `locked_until = now+15m` only when the new count is exactly 5, `RETURNING failed_attempts`. Over 5 returns 429. Load the newest unconsumed unexpired code, compare hashes with an XOR loop, and claim with `UPDATE ... WHERE id=? AND consumed_at IS NULL` (`changes` must be 1). On success consume all that email's codes, delete the throttle row, set `last_sign_in_at`, create the session. On failure at count 5 return the lock message, else the wrong-code message.
+- Verify: not invited, or a code that is not 6 digits after removing spaces, returns 401 with no write. Delete an expired lock row. Then charge first: upsert `failed_attempts + 1`, setting `locked_until = now+15m` only when the new count is exactly 5, `RETURNING failed_attempts`. Over 5 returns 429. Load the newest unconsumed unexpired code, compare hashes with an XOR loop, and claim with `UPDATE ... WHERE id=? AND consumed_at IS NULL` (`changes` must be 1). On success consume all that email's codes, delete the throttle row, set `last_sign_in_at`, create the session. Cleanup: a code request first deletes that email's expired or consumed codes older than the request window, and `createSession` deletes expired and revoked sessions. On failure at count 5 return the lock message, else the wrong-code message.
 - Code: `Uint32` from `getRandomValues` with rejection sampling above `floor(2^32/1e6)*1e6`, zero-padded to 6.
 - Logs: `inbox_auth_code_sent`, `inbox_auth_send_failed` (error code only, never its message), `inbox_auth_locked`, `inbox_auth_signed_in`, with the email masked as `a***@domain`.
 
@@ -171,16 +171,16 @@ The static asset branch does not change.
 
 **Interfaces:**
 - Consumes: the Task 2 responses.
-- Produces: `sessionFrom(status: number, body: { email?: string } | null): { state: 'signed-in'; email: string } | { state: 'signed-out' } | { state: 'unavailable' }`, in `auth-state.ts`, following `address-state.ts`.
+- Produces, in `auth-state.ts`, following `address-state.ts`: `sessionFrom(status: number | null, body: { email?: unknown } | null): { state: 'signed-in'; email: string } | { state: 'signed-out' } | { state: 'unavailable' }`, where `null` means no response; and `opensCodeStepOnFailure(status: number | null): boolean`, true only for 429.
 
-- `App.tsx`: the current `App` becomes `Inbox({ email, onSignOut })`, with its effects unchanged. A new `App` calls `GET /api/auth/me` on mount and renders nothing while loading, `<SignIn/>` full-screen when signed out, `Sign-in is unavailable right now.` on 503 or a network failure, and `<Inbox/>` only when signed in, so no data fetch starts earlier. Sign-in success sets state with no page reload, and the URL never changes, so deep links keep working.
+- `App.tsx`: the current `App` becomes `Inbox({ email, onSignOut })`, with its effects unchanged. A new `App` calls `GET /api/auth/me` on mount and renders nothing while loading, `<SignIn/>` full-screen when signed out or on any failure other than 503, `Sign-in is unavailable right now.` with a "Try again" button on 503, and `<Inbox/>` only when signed in, so no data fetch starts earlier. Sign-in success sets state with no page reload, and the URL never changes, so deep links keep working.
 - `get` and `post`: a 401 calls a module-level handler that flips `App` to `<SignIn/>`. Unmounting `Inbox` stops its polling through the existing effect cleanups.
-- `SignIn`: email step, code step (`inputMode="numeric"`, `autoComplete="one-time-code"`), "Use a different email". Show server errors as they arrive, with `role="alert"`. `<form>` with `preventDefault`, because the CSP has `form-action 'none'`.
+- `SignIn`: email step, code step (`inputMode="numeric"`, `autoComplete="one-time-code"`), "Use a different email". A 429 on the request moves on to the code step with the error shown, and the email step has "I already have a code", so someone holding a valid code is never locked out of entering it. Show server errors as they arrive, with `role="alert"`. `<form>` with `preventDefault`, because the CSP has `form-action 'none'`.
 - Sign out: POST `/api/auth/signout`, then render `<SignIn/>`. If the POST fails, stay in the inbox and show the error, because the session is still live.
 - Top bar: `Signed in as <email>` and a `Sign out` button. Rail note: `Invited users only. Use test messages only.`
 - CSS: `.signin*` rules and `input:focus-visible`, using existing tokens only.
 
-- [ ] **Step 1: Write failing tests** `sessionFrom`: 200 with email is signed-in; 401 signed-out; 503, 500 and 200 without an email are unavailable.
+- [ ] **Step 1: Write failing tests** `sessionFrom`: 200 with email is signed-in; 503 is unavailable; 401, 500, no response and 200 without an email are signed-out. `opensCodeStepOnFailure`: true for 429 only.
 - [ ] **Step 2: Run** `node --test tests/auth.test.mjs`. Expected: FAIL.
 - [ ] **Step 3: Implement** `auth-state.ts`, `SignIn.tsx`, the `App.tsx` changes, the CSS.
 - [ ] **Step 4: Run** `npm test && npm run typecheck && npm run build`. Expected: all pass.

@@ -1,9 +1,20 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
+import { opensCodeStepOnFailure } from './auth-state.ts';
+
+class RequestFailed extends Error {
+  status: number | null;
+  constructor(message: string, status: number | null) {
+    super(message);
+    this.status = status;
+  }
+}
 
 async function send<T>(path: string, body: object): Promise<T> {
-  const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  let response: Response;
+  try { response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); }
+  catch { throw new RequestFailed("We couldn't reach the server. Please retry.", null); }
   const data = await response.json().catch(() => null) as (T & { error?: string }) | null;
-  if (!response.ok || !data) throw new Error(data?.error || 'The request failed. Please retry.');
+  if (!response.ok || !data) throw new RequestFailed(data?.error || 'The request failed. Please retry.', response.status);
   return data;
 }
 
@@ -22,28 +33,33 @@ export function SignIn({ onSignedIn }: { onSignedIn: (email: string) => void }) 
   const [error,setError] = useState('');
 
   // preventDefault matters: the CSP has form-action 'none', so a native submit would be blocked.
-  const submit = (work: () => Promise<void>, onError?: () => void) => async (event: FormEvent) => {
+  const submit = (work: () => Promise<void>, onError: (status: number | null) => void) => async (event: FormEvent) => {
     event.preventDefault();
     setBusy(true); setError('');
     try { await work(); }
-    catch (e) { setError((e as Error).message); onError?.(); }
+    catch (e) { setError((e as Error).message); onError(e instanceof RequestFailed ? e.status : null); }
     finally { setBusy(false); }
+  };
+  const haveCode = () => {
+    if (email.trim()) { setError(''); setCodeSent(true); }
+    else setError('Enter your email address first.');
   };
   const errorLine = error && <p className="signin-error" role="alert">{error}</p>;
 
   if (!codeSent) return <SignInFrame>
     <h1>Sign in to the Aura inbox</h1>
     <p>Enter the email address you were invited with. We'll send you a sign-in code.</p>
-    <form onSubmit={submit(async () => { await send('/api/auth/request',{ email }); setCodeSent(true); })}>
+    <form onSubmit={submit(async () => { await send('/api/auth/request',{ email }); setCodeSent(true); },status => { if (opensCodeStepOnFailure(status)) setCodeSent(true); })}>
       <label className="signin-field">Email address<input type="email" autoComplete="email" autoFocus required value={email} onChange={e => setEmail(e.target.value)}/></label>
       {errorLine}
       <button className="signin-submit" disabled={busy}>{busy ? 'Sending…' : 'Send code'}</button>
     </form>
+    <button className="signin-back" onClick={haveCode}>I already have a code</button>
   </SignInFrame>;
 
   return <SignInFrame>
     <h1>Enter your code</h1>
-    <p>We sent a 6-digit code to <strong>{email.trim()}</strong>. It expires in 10 minutes.</p>
+    <p>Enter the 6-digit code we sent to <strong>{email.trim()}</strong>. Codes expire after 10 minutes.</p>
     <form onSubmit={submit(async () => { onSignedIn((await send<{ email: string }>('/api/auth/verify',{ email,code })).email); },() => setCode(''))}>
       <label className="signin-field">Sign-in code<input inputMode="numeric" autoComplete="one-time-code" autoFocus required value={code} onChange={e => setCode(e.target.value)}/></label>
       {errorLine}

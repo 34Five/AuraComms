@@ -16,7 +16,7 @@ npm ci
 npm run check
 ```
 
-Start the Worker with `npm run dev:worker` and Vite in a second terminal with `npm run dev`. Vite proxies `/api` to port 8788. Local D1 and R2 are separate from Cloudflare. To sign in locally, set a non-empty `SESSION_SECRET` in `.dev.vars`, apply `scripts/0004_demo_auth.sql` and `scripts/provision-invites.sql` to the local database, and read the code from the text file named in the Worker's `send_email` log line.
+Start the Worker with `npm run dev:worker` and Vite in a second terminal with `npm run dev`. Vite proxies `/api` to port 8788. Local D1 and R2 are separate from Cloudflare. To sign in locally, set a non-empty `SESSION_SECRET` in `.dev.vars`, apply `scripts/0004_demo_auth.sql` and `scripts/provision-invites.sql` to the local database, and read the code from the text file named in the Worker's `send_email` log line. Use Chrome or Firefox: Safari refuses the `Secure` cookie on `http://127.0.0.1`.
 
 The Worker expects the existing email schema. For a fresh local database, import the parent fixture, migration, and seed from the repository with `wrangler d1 execute DB --local --file PATH`. The supplied repository seed uses organization `e07_demo_org`. Override `DEMO_ORG_ID` locally to view that seed. The remote database uses Prajwal's `org_demo_001` seed. Do not import the local seed or parent fixture remotely.
 
@@ -47,7 +47,7 @@ Only addresses in `demo_auth_invites` can sign in. Anyone else sees "This addres
 | `POST /api/auth/signout` | Revokes the session on the server and clears the cookie |
 | `GET /api/auth/me` | `{email}`, or 401 |
 
-A code lasts 10 minutes and works once, and only the newest one works. Three requests per email per 10 minutes are allowed. Five wrong codes lock that email for 15 minutes. The count clears only on a successful sign-in or when a lock ends, so old typos still count. Anyone who knows an invited address can trigger that lock, use up its code requests, or replace its newest code. Sessions last 7 days.
+A code lasts 10 minutes and works once, and only the newest one works. Three requests per email per 10 minutes are allowed. Five wrong codes lock that email for 15 minutes. The count clears only on a successful sign-in or when a lock ends, so old typos still count. Anyone who knows an invited address can trigger that lock, use up its code requests, or replace its newest code. Sessions last 7 days. Each code request clears that email's finished codes, and each sign-in clears expired and revoked sessions.
 
 `SESSION_SECRET` signs cookies and keys the stored code hashes. Without it, every `/api` route except `/api/health` returns 503. Rotating it invalidates pending codes and all sessions, so everyone signs in again. Inbound mail never depends on it.
 

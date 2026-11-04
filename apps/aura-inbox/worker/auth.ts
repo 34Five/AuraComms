@@ -32,8 +32,15 @@ function fromBase64url(value: string): Uint8Array<ArrayBuffer> | null {
   catch { return null; }
 }
 
-function secretKey(env: Env): Promise<CryptoKey> {
-  return crypto.subtle.importKey('raw', encoder.encode(env.SESSION_SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
+// Holds the resolved key, not a promise: a Worker cannot wait on a promise created by another request.
+let cachedKey: { secret: string; key: CryptoKey } | null = null;
+
+async function secretKey(env: Env): Promise<CryptoKey> {
+  const secret = env.SESSION_SECRET as string;
+  if (cachedKey?.secret === secret) return cachedKey.key;
+  const key = await crypto.subtle.importKey('raw', encoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
+  cachedKey = { secret, key };
+  return key;
 }
 
 async function sign(env: Env, data: string): Promise<Uint8Array> {
@@ -79,6 +86,7 @@ export async function signedInEmail(request: Request, env: Env): Promise<string 
 export async function createSession(env: Env, email: string): Promise<string> {
   const id = base64url(crypto.getRandomValues(new Uint8Array(32)));
   const now = Date.now();
+  await env.DB.prepare('DELETE FROM demo_auth_sessions WHERE expires_at<=? OR revoked_at IS NOT NULL').bind(new Date(now).toISOString()).run();
   await env.DB.prepare('INSERT INTO demo_auth_sessions (id,email,created_at,expires_at) VALUES (?,?,?,?)')
     .bind(id, email, new Date(now).toISOString(), new Date(now + SESSION_SECONDS * 1000).toISOString()).run();
   return `${COOKIE}=${id}.${base64url(await sign(env, id))}; ${COOKIE_FLAGS}; Max-Age=${SESSION_SECONDS}`;
@@ -98,13 +106,17 @@ async function requestCode(env: Env, body: Record<string, unknown> | null): Prom
   const nowIso = new Date(now).toISOString();
   const locked = await env.DB.prepare('SELECT 1 FROM demo_auth_throttle WHERE email=? AND locked_until>?').bind(email, nowIso).first();
   if (locked) return json({ error: LOCKED }, 429);
+  const windowStart = new Date(now - REQUEST_WINDOW_MS).toISOString();
+  // Only rows older than the window go, so the request limit below still counts recently used codes.
+  await env.DB.prepare('DELETE FROM demo_auth_codes WHERE email=? AND (expires_at<=? OR consumed_at IS NOT NULL) AND created_at<?')
+    .bind(email, nowIso, windowStart).run();
   const id = crypto.randomUUID();
   const code = randomCode();
   // One statement, so concurrent requests cannot both pass the count.
   const inserted = await env.DB.prepare(`INSERT INTO demo_auth_codes (id,email,code_hash,created_at,expires_at)
     SELECT ?,?,?,?,? WHERE (SELECT COUNT(*) FROM demo_auth_codes WHERE email=? AND created_at>=?)<?`)
     .bind(id, email, await hashCode(env, email, code), nowIso, new Date(now + CODE_MS).toISOString(),
-      email, new Date(now - REQUEST_WINDOW_MS).toISOString(), MAX_REQUESTS).run();
+      email, windowStart, MAX_REQUESTS).run();
   if (!inserted.meta.changes) return json({ error: 'Too many codes requested. Try again in a few minutes.' }, 429);
   try {
     await env.EMAIL.send({ from: { email: SENDER, name: 'Aura inbox' }, to: email, subject: SUBJECT,

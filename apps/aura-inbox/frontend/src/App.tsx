@@ -324,16 +324,17 @@ function Inbox({ email, onSignOut }: { email: string; onSignOut: () => void }) {
 
 export function App() {
   const [session,setSession] = useState<Session | null>(null);
+  const [attempt,setAttempt] = useState(0);
   useEffect(() => {
     onUnauthorized = () => setSession({ state: 'signed-out' });
     const controller = new AbortController();
     fetch('/api/auth/me',{ signal: controller.signal, cache: 'no-store' })
       .then(async response => setSession(sessionFrom(response.status,await response.json().catch(() => null) as { email?: unknown } | null)))
-      .catch(e => { if ((e as Error).name !== 'AbortError') setSession({ state: 'unavailable' }); });
+      .catch(e => { if ((e as Error).name !== 'AbortError') setSession(sessionFrom(null,null)); });
     return () => { controller.abort(); onUnauthorized = () => {}; };
-  },[]);
+  },[attempt]);
   if (!session) return null;
-  if (session.state === 'unavailable') return <SignInFrame><h1>Sign-in is unavailable right now.</h1></SignInFrame>;
+  if (session.state === 'unavailable') return <SignInFrame><h1>Sign-in is unavailable right now.</h1><button className="signin-submit" onClick={() => { setSession(null); setAttempt(n => n+1); }}>Try again</button></SignInFrame>;
   if (session.state === 'signed-out') return <SignIn onSignedIn={email => setSession({ state: 'signed-in', email })}/>;
   return <Inbox email={session.email} onSignOut={() => setSession({ state: 'signed-out' })}/>;
 }
