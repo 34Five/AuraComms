@@ -159,11 +159,11 @@ Run this after the AXI-23 PR that adds the `demo` environment has merged. Until 
 npx wrangler d1 execute DB --remote --file ../../scripts/0003_email_address_provisioning.sql
 ```
 
-**2. Add the Anthony Aura, then check it.** The check must return one row. No row means a guard stopped the insert: the domain is not active, another Aura has the name, or the address is taken.
+**2. Add the Atlas Aura, then check it.** The check must return one row. No row means a guard stopped the insert: the domain is not active, another Aura has the name, or the address is taken.
 
 ```sh
-npx wrangler d1 execute DB --remote --file scripts/provision-anthony.sql
-npx wrangler d1 execute DB --remote --command "SELECT id,org_id,name FROM auras WHERE id='aura_demo_anthony'"
+npx wrangler d1 execute DB --remote --file scripts/provision-atlas.sql
+npx wrangler d1 execute DB --remote --command "SELECT id,org_id,name FROM auras WHERE id='aura_demo_atlas'"
 ```
 
 **3. Deploy the demo Worker.** The deploy prints its URL.
@@ -179,7 +179,7 @@ npx wrangler secret put CF_API_TOKEN --env demo
 npx wrangler secret put CF_ZONE_ID --env demo
 ```
 
-**5. Generate the address.** Open the demo URL. On Anthony's card, choose **Generate email**, check that it proposes `anthony@34five.studio`, then choose **Create address**.
+**5. Generate the address.** If the chip shows Failed with 'Already routed by another Cloudflare rule', pick a different Aura; do not change the existing rule. Open the demo URL. On Atlas's card, choose **Generate email**, check that it proposes `atlas@34five.studio`, then choose **Create address**.
 
 - With the secrets, the chip shows **Active** and the rule exists. Skip step 6.
 - Without them, the chip shows **Provisioning pending** with the rule to create.
@@ -189,12 +189,12 @@ npx wrangler secret put CF_ZONE_ID --env demo
 
 ```sh
 npx wrangler email routing rules list 34five.studio
-npx wrangler email routing rules create 34five.studio --name "AuraComms anthony@34five.studio" --match-type literal --match-field to --match-value anthony@34five.studio --action-type worker --action-value aura-inbox-demo
+npx wrangler email routing rules create 34five.studio --name "AuraComms atlas@34five.studio" --match-type literal --match-field to --match-value atlas@34five.studio --action-type worker --action-value aura-inbox-demo
 ```
 
 The chip stays on **Provisioning pending** because the Worker cannot see this rule. Mail still flows. If the secrets are set later, **Retry** finds the rule and the chip shows **Active**.
 
-**7. Send a real test email to `anthony@34five.studio`.** It should appear in Anthony's inbox within five seconds, and a reply should come back from that address. This needs the demo Worker in `llm` mode. Fixed mode does not reply from generated addresses. This is the first real test of a reply from a generated address. If the thread shows **Reply failed**, report that as a finding: inbound mail still counts as working.
+**7. Send a real test email to `atlas@34five.studio`.** It should appear in Atlas's inbox within five seconds, and a reply should come back from that address. This needs the demo Worker in `llm` mode. Fixed mode does not reply from generated addresses. This is the first real test of a reply from a generated address. If the thread shows **Reply failed**, report that as a finding: inbound mail still counts as working.
 
 ## Verification on November 2, 2026
 

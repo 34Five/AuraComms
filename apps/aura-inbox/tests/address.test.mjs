@@ -424,47 +424,47 @@ function demoOrg(t) {
   enableReplies(x);
   return x;
 }
-const provisionAnthony = readFileSync(new URL('../scripts/provision-anthony.sql', import.meta.url), 'utf8');
-const anthonyRows = x => x.sql.prepare("SELECT id,org_id,name FROM auras WHERE id='aura_demo_anthony'").all().map(r => ({ ...r }));
+const provisionAtlas = readFileSync(new URL('../scripts/provision-atlas.sql', import.meta.url), 'utf8');
+const atlasRows = x => x.sql.prepare("SELECT id,org_id,name FROM auras WHERE id='aura_demo_atlas'").all().map(r => ({ ...r }));
 
-test('the Anthony script adds the Aura once, gives it no address and changes no existing row', t => {
+test('the Atlas script adds the Aura once, gives it no address and changes no existing row', t => {
   const x = demoOrg(t);
   const snapshot = () => ['auras', 'email_addresses', 'email_address_assignments', 'email_domains']
-    .map(table => x.sql.prepare(`SELECT * FROM ${table} WHERE id<>'aura_demo_anthony' ORDER BY id`).all());
+    .map(table => x.sql.prepare(`SELECT * FROM ${table} WHERE id<>'aura_demo_atlas' ORDER BY id`).all());
   const before = snapshot();
-  x.sql.exec(provisionAnthony); x.sql.exec(provisionAnthony);
+  x.sql.exec(provisionAtlas); x.sql.exec(provisionAtlas);
   assert.deepEqual(snapshot(), before);
-  assert.deepEqual(anthonyRows(x), [{ id: 'aura_demo_anthony', org_id: 'org_demo_001', name: 'Anthony' }]);
-  assert.equal(x.sql.prepare("SELECT COUNT(*) AS n FROM email_address_assignments WHERE aura_id='aura_demo_anthony'").get().n, 0);
+  assert.deepEqual(atlasRows(x), [{ id: 'aura_demo_atlas', org_id: 'org_demo_001', name: 'Atlas' }]);
+  assert.equal(x.sql.prepare("SELECT COUNT(*) AS n FROM email_address_assignments WHERE aura_id='aura_demo_atlas'").get().n, 0);
   assert.deepEqual(x.sql.prepare('PRAGMA foreign_key_check').all(), []);
 });
 
-test('generating for Anthony gives anthony@34five.studio', async t => {
+test('generating for Atlas gives atlas@34five.studio', async t => {
   const x = demoOrg(t);
-  x.sql.exec(provisionAnthony);
-  const response = await generate(x, {}, 'aura_demo_anthony');
+  x.sql.exec(provisionAtlas);
+  const response = await generate(x, {}, 'aura_demo_atlas');
   assert.equal(response.status, 201);
-  assert.equal((await response.json()).address.address, 'anthony@34five.studio');
+  assert.equal((await response.json()).address.address, 'atlas@34five.studio');
 });
 
-test('the Anthony script adds nothing when another Aura has that name', t => {
+test('the Atlas script adds nothing when another Aura has that name', t => {
   const x = demoOrg(t);
-  x.sql.exec("INSERT INTO auras (id,org_id,name) VALUES ('someone_else','org_demo_001','anthony')");
-  x.sql.exec(provisionAnthony);
-  assert.deepEqual(anthonyRows(x), []);
+  x.sql.exec("INSERT INTO auras (id,org_id,name) VALUES ('someone_else','org_demo_001','atlas')");
+  x.sql.exec(provisionAtlas);
+  assert.deepEqual(atlasRows(x), []);
 });
 
-test('the Anthony script adds nothing when anthony@34five.studio is taken', t => {
+test('the Atlas script adds nothing when atlas@34five.studio is taken', t => {
   const x = demoOrg(t);
   x.sql.exec(`INSERT INTO email_addresses (id,org_id,domain_id,local_part,address,address_key)
-    SELECT 'taken','org_demo_001',id,'anthony','anthony@34five.studio','anthony@34five.studio' FROM email_domains WHERE domain_key='34five.studio'`);
-  x.sql.exec(provisionAnthony);
-  assert.deepEqual(anthonyRows(x), []);
+    SELECT 'taken','org_demo_001',id,'atlas','atlas@34five.studio','atlas@34five.studio' FROM email_domains WHERE domain_key='34five.studio'`);
+  x.sql.exec(provisionAtlas);
+  assert.deepEqual(atlasRows(x), []);
 });
 
-test('the Anthony script adds nothing when the domain is not active', t => {
+test('the Atlas script adds nothing when the domain is not active', t => {
   const x = demoOrg(t);
   x.sql.prepare("UPDATE email_domains SET status='disabled',disabled_at=? WHERE domain_key='34five.studio'").run(STAMP);
-  x.sql.exec(provisionAnthony);
-  assert.deepEqual(anthonyRows(x), []);
+  x.sql.exec(provisionAtlas);
+  assert.deepEqual(atlasRows(x), []);
 });
