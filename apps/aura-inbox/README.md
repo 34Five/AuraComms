@@ -166,7 +166,7 @@ npx wrangler d1 execute DB --remote --file scripts/provision-atlas.sql
 npx wrangler d1 execute DB --remote --command "SELECT id,org_id,name FROM auras WHERE id='aura_demo_atlas'"
 ```
 
-**3. Deploy the demo Worker.** The deploy prints its URL.
+**3. Deploy the demo Worker.** It is served only at https://inbox-demo.34five.studio (a custom domain on the zone; the workers.dev URL is off). Before the first visit, protect that hostname in Zero Trust: Access → Applications → Add → Self-hosted, domain `inbox-demo.34five.studio`, policy Allow with emails ending in `@34five.ai` and `@axiatechnologies.ai`, login method One-time PIN. Inbound mail is unaffected: Email Routing hands mail to the Worker directly.
 
 ```sh
 npm run build && npx wrangler deploy --env demo
