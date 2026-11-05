@@ -1,26 +1,24 @@
+import { emailSlug, validateEmailPrefix, isReservedPrefix, EmailPrefixError } from '../shared/email-prefix.ts';
 import type { Env } from './types.ts';
 import { HttpError } from './types.ts';
 import { json } from './utils.ts';
 
 type Row = Record<string, any>;
 type Domain = { id: string; domain: string; domain_key: string; kind: string; cloudflare_zone_id: string | null };
-type Rule = { id?: string; tag?: string; enabled?: boolean; matchers?: { type?: string; field?: string; value?: string }[];
+type Rule = { name?: string; id?: string; tag?: string; enabled?: boolean; matchers?: { type?: string; field?: string; value?: string }[];
   actions?: { type?: string; value?: string[] }[] };
 
 const MAX_LOCAL_PART = 64;
 const MAX_MATCHER_VALUE = 90; // Cloudflare's limit on a routing rule's literal value.
 const CF_API = 'https://api.cloudflare.com/client/v4';
-const CF_PAGE_SIZE = 50, CF_MAX_PAGES = 20, CF_TIMEOUT_MS = 10_000;
+const CF_PAGE_SIZE = 50, CF_MAX_PAGES = 20, CF_TIMEOUT_MS = 5_000;
 const DEFAULT_WORKER = 'aura-inbox-demo';
 const CLASH_ATTEMPTS = 3;
+const routingWorker=(env:Env)=>env.ADDRESS_PROVISIONER && env.ADDRESS_PROVISIONING_SECRET ? 'aura-inbox-test' : env.DEMO_WORKER_NAME || DEFAULT_WORKER;
 
 class ProvisioningError extends Error {}
 
-export function slug(name: string): string {
-  return name.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase()
-    .replace(/[^a-z0-9.-]+/g, '-').replace(/-{2,}/g, '-').replace(/\.{2,}/g, '.')
-    .replace(/^[.-]+|[.-]+$/g, '') || 'aura';
-}
+export const slug = emailSlug;
 
 function fit(base: string, suffix: string, domain: string): string {
   const limit = Math.min(MAX_LOCAL_PART, MAX_MATCHER_VALUE - domain.length - 1) - suffix.length;
@@ -33,8 +31,8 @@ async function freeLocalPart(env: Env, name: string, domain: Domain): Promise<st
   const taken = new Set(results.map(r => r.local_part));
   const base = slug(name);
   let candidate = fit(base, '', domain.domain_key);
-  for (let n = 2; taken.has(candidate); n++) candidate = fit(base, `-${n}`, domain.domain_key);
-  return candidate;
+  for (let n = 2; taken.has(candidate) || isReservedPrefix(candidate); n++) candidate = fit(base, `-${n}`, domain.domain_key);
+  return validatePrefix(candidate,domain.domain_key);
 }
 
 async function activeDomains(env: Env): Promise<Domain[]> {
@@ -44,11 +42,8 @@ async function activeDomains(env: Env): Promise<Domain[]> {
 }
 
 export function validatePrefix(value: unknown, domain: string): string {
-  if (typeof value !== 'string') throw new HttpError(400,'Enter an email prefix.');
-  const prefix=value.trim().toLowerCase();
-  if (!prefix || prefix.length>MAX_LOCAL_PART || !/^[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*$/.test(prefix)) throw new HttpError(400,'Use an email prefix of up to 64 characters without spaces or an @ sign.');
-  if (prefix.length+domain.length+1>MAX_MATCHER_VALUE) throw new HttpError(400,'This email address is too long for routing. Choose a shorter prefix.');
-  return prefix;
+  try { return validateEmailPrefix(value,domain); }
+  catch(error) { if(error instanceof EmailPrefixError)throw new HttpError(error.status,error.message); throw error; }
 }
 
 
@@ -80,11 +75,11 @@ function present(row: Row) {
       rule: status === 'active' ? null : routingRule(row.address, row.worker_name) } };
 }
 
-async function cloudflare<T>(env: Env, zone: string, path: string, init?: RequestInit): Promise<T> {
+async function cloudflare<T>(env: Env, zone: string, path: string, init?: RequestInit, budget?: AbortSignal): Promise<T> {
   let response: Response;
   // The thrown error is not recorded: only fixed text and Cloudflare's own codes reach the database.
   try {
-    response = await fetch(`${CF_API}/zones/${zone}/email/routing/rules${path}`, { ...init, signal: AbortSignal.timeout(CF_TIMEOUT_MS),
+    response = await fetch(`${CF_API}/zones/${zone}/email/routing/rules${path}`, { ...init, signal: budget ? AbortSignal.any([budget,AbortSignal.timeout(CF_TIMEOUT_MS)]) : AbortSignal.timeout(CF_TIMEOUT_MS),
       headers: { Authorization: `Bearer ${env.CF_API_TOKEN}`, 'Content-Type': 'application/json' } });
   } catch { throw new ProvisioningError('Could not reach the Cloudflare API.'); }
   const body = await response.json().catch(() => null) as { success?: boolean; result?: T; errors?: { code?: number; message?: string }[] } | null;
@@ -95,9 +90,9 @@ async function cloudflare<T>(env: Env, zone: string, path: string, init?: Reques
   return body.result as T;
 }
 
-async function existingRule(env: Env, zone: string, address: string): Promise<Rule | null> {
+async function existingRule(env: Env, zone: string, address: string, budget: AbortSignal): Promise<Rule | null> {
   for (let page = 1; page <= CF_MAX_PAGES; page++) {
-    const rules = await cloudflare<Rule[]>(env, zone, `?page=${page}&per_page=${CF_PAGE_SIZE}`);
+    const rules = await cloudflare<Rule[]>(env, zone, `?page=${page}&per_page=${CF_PAGE_SIZE}`,undefined,budget);
     const found = rules.find(r => r.matchers?.some(m => m.type === 'literal' && m.field === 'to' && m.value?.toLowerCase() === address));
     if (found) return found;
     if (rules.length < CF_PAGE_SIZE) return null;
@@ -106,13 +101,16 @@ async function existingRule(env: Env, zone: string, address: string): Promise<Ru
 }
 
 async function ensureRule(env: Env, zone: string, address: string, worker: string): Promise<string> {
-  const rule = await existingRule(env, zone, address);
+  const budget=AbortSignal.timeout(12_000);
+  const rule = await existingRule(env, zone, address, budget);
   // Never overwrite a rule we did not make: the address may be someone's live mailbox.
   if (rule) {
-    const ours = rule.enabled !== false && rule.actions?.some(a => a.type === 'worker' && a.value?.includes(worker));
+    const ours = rule.name===`AuraComms ${address}` && rule.enabled !== false
+      && rule.matchers?.length===1 && rule.actions?.length===1
+      && rule.actions[0].type==='worker' && rule.actions[0].value?.length===1 && rule.actions[0].value[0]===worker;
     if (!ours) throw new ProvisioningError(`Already routed by another Cloudflare rule (${rule.id ?? rule.tag}). Change or remove it, then retry.`);
   }
-  const target = rule ?? await cloudflare<Rule>(env, zone, '', { method: 'POST', body: JSON.stringify(routingRule(address, worker)) });
+  const target = rule ?? await cloudflare<Rule>(env, zone, '', { method: 'POST', body: JSON.stringify(routingRule(address, worker)) },budget);
   const id = target.id ?? target.tag;
   if (!id) throw new ProvisioningError('Cloudflare API returned a rule with no identifier.');
   return id;
@@ -121,14 +119,25 @@ async function ensureRule(env: Env, zone: string, address: string, worker: strin
 // Never throws for a Cloudflare problem: the address exists either way, and retry can finish it.
 async function provision(env: Env, row: Row): Promise<void> {
   if (env.ADDRESS_PROVISIONER && env.ADDRESS_PROVISIONING_SECRET) {
+    let status: number | null=null, auraId: string | null=null;
     try {
       const assigned=await env.DB.prepare('SELECT aura_id FROM email_address_assignments WHERE org_id=? AND address_id=? AND ended_at IS NULL').bind(env.DEMO_ORG_ID,row.id).first<{aura_id:string}>();
       if(!assigned) throw new ProvisioningError('The address has no active Aura assignment.');
-      const response=await env.ADDRESS_PROVISIONER.fetch(new Request('https://provisioner/internal/provision-address',{method:'POST',headers:{Authorization:`Bearer ${env.ADDRESS_PROVISIONING_SECRET}`,'Content-Type':'application/json'},body:JSON.stringify({aura_id:assigned.aura_id})}));
-      if(!response.ok) throw new ProvisioningError('Email setup service is unavailable. Retry or contact an administrator.');
+      auraId=assigned.aura_id;
+      const response=await env.ADDRESS_PROVISIONER.fetch(new Request('https://provisioner/internal/provision-address',{
+        method:'POST',signal:AbortSignal.timeout(15_000),
+        headers:{Authorization:`Bearer ${env.ADDRESS_PROVISIONING_SECRET}`,'Content-Type':'application/json'},
+        body:JSON.stringify({aura_id:auraId}),
+      }));
+      status=response.status;
+      if(!response.ok) throw new ProvisioningError('Email setup service is unavailable.');
+      const state=await env.DB.prepare('SELECT status FROM email_address_provisioning WHERE org_id=? AND address_id=?').bind(env.DEMO_ORG_ID,row.id).first<{status:string}>();
+      if(state?.status!=='active')throw new ProvisioningError('The service did not activate email routing.');
       return;
     } catch {
-      await env.DB.prepare("UPDATE email_address_provisioning SET status='failed',failure_reason=?,updated_at=? WHERE org_id=? AND address_id=?").bind('Email setup service is unavailable. Retry or contact an administrator.',new Date().toISOString(),env.DEMO_ORG_ID,row.id).run();
+      console.warn(JSON.stringify({event:'address_provision_delegate_failed',status,aura_id:auraId}));
+      await env.DB.prepare("UPDATE email_address_provisioning SET status='failed',failure_reason=COALESCE(failure_reason,?),updated_at=? WHERE org_id=? AND address_id=? AND status<>'active'")
+        .bind('Email setup service is unavailable or did not complete routing. Retry or contact an administrator.',new Date().toISOString(),env.DEMO_ORG_ID,row.id).run();
       return;
     }
   }
@@ -172,7 +181,11 @@ export async function proposeAddress(env: Env, aura: Row): Promise<Response> {
 export async function generateAddress(request: Request, env: Env, aura: Row): Promise<Response> {
   const body = await readBody(request);
   const existing = await current(env, aura.id);
-  if (existing) return retryProvisioning(env,aura.id);
+  if (existing) {
+    if(body.local_part!==undefined && (typeof body.local_part!=='string' || body.local_part.trim().toLowerCase()!==existing.address.split('@')[0])) throw new HttpError(409,'This Aura already has a different email address.');
+    if(body.domain_id!==undefined && body.domain_id!==existing.domain_id) throw new HttpError(409,'This Aura already has an address on a different domain.');
+    return retryProvisioning(env,aura.id);
+  }
   const domains = await activeDomains(env);
   if (!domains.length) return noDomain();
   let domain = domains[0];
@@ -200,9 +213,13 @@ export async function generateAddress(request: Request, env: Env, aura: Row): Pr
           .bind(`assignment_${crypto.randomUUID()}`, org, id, aura.id, now, 'Generated from the Aura card', org, id),
         env.DB.prepare(`INSERT INTO email_address_provisioning (org_id,address_id,status,worker_name,updated_at)
           SELECT ?,?,'provisioning_pending',?,? WHERE EXISTS (SELECT 1 FROM email_addresses WHERE org_id=? AND id=?)`)
-          .bind(org, id, env.DEMO_WORKER_NAME || DEFAULT_WORKER, now, org, id),
+          .bind(org, id, routingWorker(env), now, org, id),
       ]);
-      if (!created.meta.changes) return json({ address: present((await current(env, aura.id))!) });
+      if (!created.meta.changes) {
+        const winner=(await current(env,aura.id))!;
+        if(body.local_part!==undefined && winner.address!==address) throw new HttpError(409,'This Aura already has a different email address.');
+        return json({address:present(winner)});
+      }
       await provision(env, (await current(env, aura.id))!);
       return json({ address: present((await current(env, aura.id))!) }, 201);
     } catch (error) {
@@ -219,6 +236,7 @@ export async function retryProvisioning(env: Env, auraId: string): Promise<Respo
   if (row.status !== 'active' || row.domain_status !== 'active') {
     return json({ error: 'This address is not active, so it cannot be provisioned.', reason: 'address_not_active' }, 409);
   }
+  if(row.provisioning_status) validatePrefix(row.address.split('@')[0],row.domain);
   if ((row.provisioning_status ?? 'active') === 'active') return json({ address: present(row) });
   await provision(env, row);
   return json({ address: present((await current(env, auraId))!) });

@@ -115,7 +115,7 @@ test('a thread with no inbound mail names its To recipient and never a Bcc', asy
 });
 
 const provisionAtlas = readFileSync(new URL('../scripts/provision-atlas.sql', import.meta.url), 'utf8');
-const ATLAS = 'atlas@34five.studio';
+const ATLAS = 'atlas-2@34five.studio';
 
 async function generated(t, x) {
   const world = merlin(t, x);

@@ -172,7 +172,7 @@ A failure never blocks the address. Retry finishes it once the cause is fixed.
 Apply the migration before deploying, because `/api/auras` reads the new table. It only adds a table, and earlier deployed code ignores it.
 
 ```sh
-npx wrangler d1 execute DB --remote --file ../../scripts/0003_email_address_provisioning.sql
+npx wrangler d1 execute DB --remote --file ../../scripts/0005_email_address_provisioning.sql
 ```
 
 To let the Worker create rules, set a token limited to Email Routing Rules on the zone, and the zone ID. A domain row's `cloudflare_zone_id` takes priority over `CF_ZONE_ID`. `DEMO_WORKER_NAME` sets the target Worker and defaults to `aura-inbox-demo`.
@@ -189,7 +189,7 @@ Run this after the AXI-23 PR that adds the `demo` environment has merged. Until 
 **1. Add the provisioning table.** Do this before deploying, or `/api/auras` returns 500 on the new code.
 
 ```sh
-npx wrangler d1 execute DB --remote --file ../../scripts/0003_email_address_provisioning.sql
+npx wrangler d1 execute DB --remote --file ../../scripts/0005_email_address_provisioning.sql
 ```
 
 **2. Add the Atlas Aura, then check it.** The check must return one row. No row means a guard stopped the insert: the domain is not active, another Aura has the name, or the address is taken.
@@ -248,3 +248,15 @@ The chip stays on **Provisioning pending** because the Worker cannot see this ru
 - Live API checks returned populated seeded messages for each Aura and `404` for cross-Aura thread lookups.
 - Both real receiving addresses are active in D1 and have enabled Cloudflare rules. The spike-test, anthony, and catch-all rules retained their prior IDs and actions.
 - Live browser checks covered both inboxes and conversation loading. No external SMTP test message was sent during setup.
+
+## Studio provisioning bridge (PR #16)
+
+With the `env.demo.services` binding `ADDRESS_PROVISIONER` targeting `aura-inbox-test`, and a nonempty `ADDRESS_PROVISIONING_SECRET`, address generation/retries delegate to the Studio Worker's `/internal/provision-address` endpoint. Set the **same dedicated secret** on both Workers with Wrangler secret configuration; never commit it or give this client the Cloudflare domain token. `.dev.vars.example` documents the local secret name. Cross-Worker local testing needs the companion Studio Worker running and its service binding wired to that local instance.
+
+**Dependency:** the server is implemented in PR #15 on `feature/aura-demo-authentication`, not on `spikes/cf-email`. Deploy that server before enabling the service binding/secret in this client. Merging #16 alone does not bring the server implementation into `spikes/cf-email`. Until the base branches are reconciled, do not deploy the plain/default inbox config over the governed Studio Worker. Missing binding/secret retains the legacy direct provisioning path, which needs its own Cloudflare token and zone; the demo deployment uses delegation.
+
+The client allows 15 seconds, then records a retryable failure and logs only the event, HTTP status (or null), and Aura ID. A 2xx response alone is insufficient: the shared D1 row must be active. A failed call never downgrades an already active row. Pending instructions target `aura-inbox-test` when delegation is configured, and the configured direct Worker otherwise.
+
+`shared/email-prefix.ts` is the single policy module used by both apps. Reserved mailbox/service names are rejected before inserts even when absent from D1. User prefixes accept letters/digits with single dots or hyphens. A collision or an attempt to change an existing assignment returns 409. New suggestions skip reserved names (for example, the reserved Atlas name suggests `atlas-2`). Existing provisioned addresses are not renamed.
+
+Use the canonical `scripts/0005_email_address_provisioning.sql`; this replaces the previous `0003_email_address_provisioning.sql` filename. Existing databases can apply `0005` idempotently; there is no second provisioning table migration to apply. Keep the invite sign-in migration separate and never import local parent fixtures into shared D1.

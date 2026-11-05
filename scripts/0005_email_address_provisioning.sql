@@ -1,6 +1,6 @@
 -- AXI-19: additive. Cloudflare routing state for an address, kept apart from its lifecycle status.
 -- An address with no row here was routed by hand before this table existed.
-CREATE TABLE email_address_provisioning (
+CREATE TABLE IF NOT EXISTS email_address_provisioning (
   org_id TEXT NOT NULL,
   address_id TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('provisioning_pending','active','failed')),

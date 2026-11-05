@@ -8,7 +8,7 @@ import { email, enableReplies, ORG, SALES, setup } from './harness.mjs';
 const NEW = 'aura_new', ZONE = 'zone_from_env', TOKEN = 'secret-token-value';
 const STAMP = '2026-10-22T08:00:00.000Z';
 
-function world(t, name = 'Merlin') {
+function world(t, name = 'Megan') {
   const x = setup(t);
   x.sql.prepare('INSERT INTO auras (id,org_id,name) VALUES (?,?,?)').run(NEW, ORG, name);
   return x;
@@ -59,9 +59,9 @@ test('one active domain is used without asking', async t => {
   const response = await generate(x);
   assert.equal(response.status, 201);
   const { address } = await response.json();
-  assert.equal(address.address, 'merlin@demo.34five.studio');
+  assert.equal(address.address, 'megan@demo.34five.studio');
   assert.equal(address.domain_id, 'domain_default');
-  assert.deepEqual(currentAddresses(x), ['merlin@demo.34five.studio']);
+  assert.deepEqual(currentAddresses(x), ['megan@demo.34five.studio']);
   assert.deepEqual(x.sql.prepare('PRAGMA foreign_key_check').all(), []);
 });
 
@@ -75,7 +75,7 @@ test('several active domains return the choices until one is named', async t => 
   assert.deepEqual(currentAddresses(x), []);
   const chosen = await generate(x, { domain_id: 'domain_second' });
   assert.equal(chosen.status, 201);
-  assert.equal((await chosen.json()).address.address, 'merlin@second.example.com');
+  assert.equal((await chosen.json()).address.address, 'megan@second.example.com');
 });
 
 test('a domain that is not active for the org is refused', async t => {
@@ -89,9 +89,9 @@ test('a domain that is not active for the org is refused', async t => {
 });
 
 for (const [name, expected] of [
-  ['Merlin', 'merlin'],
+  ['Merlin', 'merlin-2'],
   ['Customer Support Aura', 'customer-support-aura'],
-  ['  --Dr. Émile  O\'Neil_3!-- ', 'dr.-emile-o-neil-3'],
+  ['  --Dr. Émile  O\'Neil_3!-- ', 'dr.emile-o-neil-3'],
   ['a..b', 'a.b'],
   ['日本語', 'aura'],
   ['x'.repeat(200), 'x'.repeat(64)],
@@ -111,8 +111,8 @@ test('a taken local part gets the next numeric suffix', async t => {
 test('a released address is not reused', async t => {
   const x = world(t);
   x.sql.exec(`INSERT INTO email_addresses (id,org_id,domain_id,local_part,address,address_key,status,disabled_at,released_at)
-    VALUES ('old','${ORG}','domain_default','merlin','merlin@demo.34five.studio','merlin@demo.34five.studio','released','${STAMP}','${STAMP}')`);
-  assert.equal((await (await generate(x)).json()).address.address, 'merlin-2@demo.34five.studio');
+    VALUES ('old','${ORG}','domain_default','megan','megan@demo.34five.studio','megan@demo.34five.studio','released','${STAMP}','${STAMP}')`);
+  assert.equal((await (await generate(x)).json()).address.address, 'megan-2@demo.34five.studio');
 });
 
 test('a suffix keeps a long local part within the limit', async t => {
@@ -137,7 +137,7 @@ test('concurrent generates create one address', async t => {
   const responses = await Promise.all([generate(x), generate(x), generate(x)]);
   assert.deepEqual(responses.map(r => r.status).sort(), [200, 200, 201]);
   assert.equal(currentAddresses(x).length, 1);
-  assert.equal(x.sql.prepare('SELECT COUNT(*) AS n FROM email_addresses WHERE org_id=? AND domain_id=? AND local_part LIKE ?').get(ORG, 'domain_default', 'merlin%').n, 1);
+  assert.equal(x.sql.prepare('SELECT COUNT(*) AS n FROM email_addresses WHERE org_id=? AND domain_id=? AND local_part LIKE ?').get(ORG, 'domain_default', 'megan%').n, 1);
 });
 
 test('an existing assignment is returned and not provisioned', async t => {
@@ -160,7 +160,7 @@ test('reading an address returns it with its status, or 404 when there is none',
   const found = await x.request(`/api/auras/${NEW}/address`);
   assert.equal(found.status, 200);
   const { address } = await found.json();
-  assert.equal(address.address, 'merlin@demo.34five.studio');
+  assert.equal(address.address, 'megan@demo.34five.studio');
   assert.equal(address.provisioning.status, 'provisioning_pending');
 });
 
@@ -196,7 +196,7 @@ test('without the secrets the address is created pending with the exact rule and
   const { address } = await response.json();
   assert.equal(calls.length, 0);
   assert.equal(address.provisioning.status, 'provisioning_pending');
-  assert.deepEqual(address.provisioning.rule, ruleFor('merlin@demo.34five.studio'));
+  assert.deepEqual(address.provisioning.rule, ruleFor('megan@demo.34five.studio'));
 });
 
 test('with the secrets a routing rule is created for the demo Worker', async t => {
@@ -208,7 +208,7 @@ test('with the secrets a routing rule is created for the demo Worker', async t =
   const created = calls.find(c => c.method === 'POST');
   assert.equal(created.url, `https://api.cloudflare.com/client/v4/zones/${ZONE}/email/routing/rules`);
   assert.equal(created.authorization, `Bearer ${TOKEN}`);
-  assert.deepEqual(created.body, ruleFor('merlin@demo.34five.studio'));
+  assert.deepEqual(created.body, ruleFor('megan@demo.34five.studio'));
   assert.equal(address.provisioning.status, 'active');
   assert.equal(address.provisioning.rule_id, 'rule_new');
   assert.equal(address.provisioning.rule, null);
@@ -240,7 +240,7 @@ test('a failed call never blocks the address and retry recovers it', async t => 
   const { address } = await response.json();
   assert.equal(address.provisioning.status, 'failed');
   assert.match(address.provisioning.reason, /2007.*Invalid worker/);
-  assert.deepEqual(address.provisioning.rule, ruleFor('merlin@demo.34five.studio'));
+  assert.deepEqual(address.provisioning.rule, ruleFor('megan@demo.34five.studio'));
   assert.equal(currentAddresses(x).length, 1);
   fail = false;
   const retried = await post(x, `/api/auras/${NEW}/address/provision`);
@@ -310,7 +310,7 @@ test('retry on an address routed by hand makes no call', async t => {
 test('retry on a disabled address is refused and makes no call', async t => {
   const x = world(t);
   await generate(x);
-  x.sql.prepare("UPDATE email_addresses SET status='disabled',disabled_at=? WHERE address_key=?").run(STAMP, 'merlin@demo.34five.studio');
+  x.sql.prepare("UPDATE email_addresses SET status='disabled',disabled_at=? WHERE address_key=?").run(STAMP, 'megan@demo.34five.studio');
   secrets(x);
   const calls = cloudflare(t);
   const response = await post(x, `/api/auras/${NEW}/address/provision`);
@@ -326,7 +326,7 @@ test('retry with no address is not found', async t => {
 
 test('an existing rule for this address and Worker is adopted, not duplicated', async t => {
   const x = world(t); secrets(x);
-  const calls = cloudflare(t, { rules: [{ id: 'rule_existing', ...ruleFor('merlin@demo.34five.studio') }] });
+  const calls = cloudflare(t, { rules: [{ id: 'rule_existing', ...ruleFor('megan@demo.34five.studio') }] });
   const { address } = await (await generate(x)).json();
   assert.equal(address.provisioning.status, 'active');
   assert.equal(address.provisioning.rule_id, 'rule_existing');
@@ -336,7 +336,7 @@ test('an existing rule for this address and Worker is adopted, not duplicated', 
 test('an address already routed elsewhere fails and the rule is left alone', async t => {
   const x = world(t); secrets(x);
   const calls = cloudflare(t, { rules: [{ id: 'rule_human', name: 'human', enabled: true,
-    matchers: [{ type: 'literal', field: 'to', value: 'merlin@demo.34five.studio' }],
+    matchers: [{ type: 'literal', field: 'to', value: 'megan@demo.34five.studio' }],
     actions: [{ type: 'forward', value: ['someone@example.com'] }] }] });
   const { address } = await (await generate(x)).json();
   assert.equal(address.provisioning.status, 'failed');
@@ -361,7 +361,7 @@ test('every page of existing rules is checked before creating', async t => {
     assert.equal(init.method || 'GET', 'GET');
     const page = Number(new URL(url).searchParams.get('page'));
     const filler = Array.from({ length: 50 }, (_, i) => ({ id: `r${i}`, matchers: [{ type: 'literal', field: 'to', value: `f${i}@example.com` }], actions: [] }));
-    return Response.json({ success: true, result: page === 1 ? filler : [{ id: 'rule_page2', ...ruleFor('merlin@demo.34five.studio') }] });
+    return Response.json({ success: true, result: page === 1 ? filler : [{ id: 'rule_page2', ...ruleFor('megan@demo.34five.studio') }] });
   });
   const { address } = await (await generate(x)).json();
   assert.equal(address.provisioning.rule_id, 'rule_page2');
@@ -381,7 +381,7 @@ test('the proposal names the address for each active domain and writes nothing',
   const response = await x.request(`/api/auras/${NEW}/address/proposal`);
   assert.equal(response.status, 200);
   const { domains } = await response.json();
-  assert.deepEqual(domains.map(d => d.address).sort(), ['merlin@demo.34five.studio', 'merlin@second.example.com']);
+  assert.deepEqual(domains.map(d => d.address).sort(), ['megan@demo.34five.studio', 'megan@second.example.com']);
   assert.deepEqual(currentAddresses(x), []);
 });
 
@@ -395,7 +395,7 @@ test('the proposal explains when there is no active domain', async t => {
 test('mail to a generated address reaches the Aura inbox', async t => {
   const x = world(t);
   await generate(x);
-  const message = email('merlin@demo.34five.studio');
+  const message = email('megan@demo.34five.studio');
   await receive(message, x.env);
   assert.equal(message.rejected, null);
   const { threads } = await (await x.request(`/api/auras/${NEW}/inbox`)).json();
@@ -439,12 +439,12 @@ test('the Atlas script adds the Aura once, gives it no address and changes no ex
   assert.deepEqual(x.sql.prepare('PRAGMA foreign_key_check').all(), []);
 });
 
-test('generating for Atlas gives atlas@34five.studio', async t => {
+test('generating for reserved Atlas suggests atlas-2@34five.studio', async t => {
   const x = demoOrg(t);
   x.sql.exec(provisionAtlas);
   const response = await generate(x, {}, 'aura_demo_atlas');
   assert.equal(response.status, 201);
-  assert.equal((await response.json()).address.address, 'atlas@34five.studio');
+  assert.equal((await response.json()).address.address, 'atlas-2@34five.studio');
 });
 
 test('the Atlas script adds nothing when another Aura has that name', t => {
@@ -467,4 +467,22 @@ test('the Atlas script adds nothing when the domain is not active', t => {
   x.sql.prepare("UPDATE email_domains SET status='disabled',disabled_at=? WHERE domain_key='34five.studio'").run(STAMP);
   x.sql.exec(provisionAtlas);
   assert.deepEqual(atlasRows(x), []);
+});
+
+
+test('explicit reserved names and invalid separator characters create no address rows',async t=>{
+ const x=world(t),before=x.sql.prepare('SELECT count(*) n FROM email_addresses').get().n;
+ for(const local_part of ['anthony','melina','merlin','support','no-reply','postmaster'])assert.equal((await generate(x,{local_part})).status,409);
+ for(const local_part of ['a+b','x/y',"o'brien",'a.-b','a--b'])assert.equal((await generate(x,{local_part})).status,400);
+ assert.equal(x.sql.prepare('SELECT count(*) n FROM email_addresses').get().n,before);assert.deepEqual(currentAddresses(x),[]);
+});
+
+test('explicit collision, concurrent reservation, and changed existing prefixes return 409',async t=>{
+ const x=world(t);await generate(x,{local_part:'megan'});
+ assert.equal((await generate(x,{local_part:'different'})).status,409);
+ x.sql.prepare('INSERT INTO auras(id,org_id,name) VALUES (?,?,?)').run('aura_collision',ORG,'Another');
+ assert.equal((await generate(x,{local_part:'megan'},'aura_collision')).status,409);
+ const batch=x.env.DB.batch;x.env.DB.batch=async()=>{throw Error('UNIQUE constraint failed: email_addresses.domain_id, email_addresses.local_part');};
+ assert.equal((await generate(x,{local_part:'race-check'},'aura_collision')).status,409);x.env.DB.batch=batch;
+ assert.equal(currentAddresses(x,'aura_collision').length,0);
 });
