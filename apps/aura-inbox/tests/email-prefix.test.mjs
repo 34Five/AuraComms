@@ -12,3 +12,7 @@ test('prefixes accept only letters and numbers with single dot or hyphen separat
 test('generated suggestions use the same separator grammar',()=>{
   for(const name of ['Dr. Émile O\'Neil','a..b','a.-b','--a--','日本語'])assert.match(emailSlug(name),/^[a-z0-9]+(?:[.-][a-z0-9]+)*$/);
 });
+
+for(const prefix of ['orbi','daniel','olivia','sophia','lyra','nova','iris','spike-test-2','mailer-daemon','no.reply','post.master','support.test','spike.test.2','mail.er-daemon'])test(`expanded reservation catches ${prefix}`,()=>{
+ assert.throws(()=>validateEmailPrefix(prefix,'34five.studio'),{status:409});
+});

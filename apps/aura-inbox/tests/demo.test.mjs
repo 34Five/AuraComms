@@ -26,7 +26,9 @@ test('the demo environment runs llm replies on its own Worker and leaves the def
   assert.ok(!config.send_email[0].allowed_sender_addresses.includes(MERLIN));
   assert.equal(demo.name, 'aura-inbox-demo');
   assert.equal(demo.vars.AUTO_REPLY_MODE, 'llm');
-  assert.deepEqual({ ...demo.vars, AUTO_REPLY_MODE: 'fixed' }, config.vars);
+  const {ADDRESS_PROVISIONER_WORKER,...replyVars}=demo.vars;
+  assert.equal(ADDRESS_PROVISIONER_WORKER,demo.services[0].service);
+  assert.deepEqual({ ...replyVars, AUTO_REPLY_MODE: 'fixed' }, config.vars);
   assert.deepEqual(demo.d1_databases, config.d1_databases);
   assert.deepEqual(demo.r2_buckets, config.r2_buckets);
   assert.equal(demo.durable_objects, undefined);

@@ -1,4 +1,4 @@
-import { emailSlug, validateEmailPrefix, isReservedPrefix, EmailPrefixError } from '../shared/email-prefix.ts';
+import { emailSlug, validateEmailPrefix, isReservedPrefix, existingPrefixNeedsManualRouting, EmailPrefixError } from '../shared/email-prefix.ts';
 import type { Env } from './types.ts';
 import { HttpError } from './types.ts';
 import { json } from './utils.ts';
@@ -14,7 +14,7 @@ const CF_API = 'https://api.cloudflare.com/client/v4';
 const CF_PAGE_SIZE = 50, CF_MAX_PAGES = 20, CF_TIMEOUT_MS = 5_000;
 const DEFAULT_WORKER = 'aura-inbox-demo';
 const CLASH_ATTEMPTS = 3;
-const routingWorker=(env:Env)=>env.ADDRESS_PROVISIONER && env.ADDRESS_PROVISIONING_SECRET ? 'aura-inbox-test' : env.DEMO_WORKER_NAME || DEFAULT_WORKER;
+const routingWorker=(env:Env)=>env.ADDRESS_PROVISIONER && env.ADDRESS_PROVISIONING_SECRET ? env.ADDRESS_PROVISIONER_WORKER || DEFAULT_WORKER : env.DEMO_WORKER_NAME || DEFAULT_WORKER;
 
 class ProvisioningError extends Error {}
 
@@ -84,7 +84,7 @@ async function cloudflare<T>(env: Env, zone: string, path: string, init?: Reques
   } catch { throw new ProvisioningError('Could not reach the Cloudflare API.'); }
   const body = await response.json().catch(() => null) as { success?: boolean; result?: T; errors?: { code?: number; message?: string }[] } | null;
   if (!response.ok || !body?.success) {
-    const detail = (body?.errors ?? []).map(e => `${e.code} ${e.message}`).join('; ').slice(0, 300);
+    const detail = (body?.errors ?? []).map(e => String(e.code)).join(', ').slice(0, 100);
     throw new ProvisioningError(`Cloudflare API returned ${response.status}${detail ? `: ${detail}` : ''}`);
   }
   return body.result as T;
@@ -136,7 +136,7 @@ async function provision(env: Env, row: Row): Promise<void> {
       return;
     } catch {
       console.warn(JSON.stringify({event:'address_provision_delegate_failed',status,aura_id:auraId}));
-      await env.DB.prepare("UPDATE email_address_provisioning SET status='failed',failure_reason=COALESCE(failure_reason,?),updated_at=? WHERE org_id=? AND address_id=? AND status<>'active'")
+      await env.DB.prepare("UPDATE email_address_provisioning SET status='failed',failure_reason=?,updated_at=? WHERE org_id=? AND address_id=? AND status<>'active'")
         .bind('Email setup service is unavailable or did not complete routing. Retry or contact an administrator.',new Date().toISOString(),env.DEMO_ORG_ID,row.id).run();
       return;
     }
@@ -236,8 +236,10 @@ export async function retryProvisioning(env: Env, auraId: string): Promise<Respo
   if (row.status !== 'active' || row.domain_status !== 'active') {
     return json({ error: 'This address is not active, so it cannot be provisioned.', reason: 'address_not_active' }, 409);
   }
-  if(row.provisioning_status) validatePrefix(row.address.split('@')[0],row.domain);
   if ((row.provisioning_status ?? 'active') === 'active') return json({ address: present(row) });
+  if(existingPrefixNeedsManualRouting(row.address.split('@')[0],row.domain)) {
+    return json({error:'This existing address uses a reserved or legacy prefix. Its address is preserved; an administrator must check its routing manually.',reason:'manual_routing_required',address:present(row)},409);
+  }
   await provision(env, row);
   return json({ address: present((await current(env, auraId))!) });
 }

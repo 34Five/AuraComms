@@ -47,3 +47,11 @@ test('delegated fetch has a 15 second timeout',async t=>{
  x.env.ADDRESS_PROVISIONING_SECRET='bridge-secret';x.env.ADDRESS_PROVISIONER={async fetch(request){assert.ok(request.signal instanceof AbortSignal);return new Response('unavailable',{status:503});}};
  await x.request('/api/auras/aura_megan/address',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});assert.ok(limits.includes(15000));
 });
+
+
+test('new pending instructions use the configured server name and delegated failures replace stale errors',async t=>{
+ const x=setup(t);x.sql.prepare('INSERT INTO auras(id,org_id,name) VALUES (?,?,?)').run('aura_megan',ORG,'Megan');
+ Object.assign(x.env,{ADDRESS_PROVISIONING_SECRET:'bridge-secret',ADDRESS_PROVISIONER_WORKER:'configured-studio'});
+ x.env.ADDRESS_PROVISIONER={async fetch(){const row=x.sql.prepare('SELECT worker_name FROM email_address_provisioning WHERE org_id=?').get(ORG);assert.equal(row.worker_name,'configured-studio');x.sql.prepare("UPDATE email_address_provisioning SET failure_reason='stale error' WHERE org_id=?").run(ORG);return new Response('Unavailable',{status:503});}};
+ const response=await x.request('/api/auras/aura_megan/address',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});const body=await response.json();assert.equal(body.address.provisioning.status,'failed');assert.notEqual(body.address.provisioning.reason,'stale error');assert.equal(body.address.provisioning.rule.actions[0].value[0],'configured-studio');
+});

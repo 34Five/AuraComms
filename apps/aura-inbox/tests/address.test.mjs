@@ -239,7 +239,8 @@ test('a failed call never blocks the address and retry recovers it', async t => 
   assert.equal(response.status, 201);
   const { address } = await response.json();
   assert.equal(address.provisioning.status, 'failed');
-  assert.match(address.provisioning.reason, /2007.*Invalid worker/);
+  assert.match(address.provisioning.reason, /400: 2007/);
+  assert.doesNotMatch(address.provisioning.reason,/Invalid worker/);
   assert.deepEqual(address.provisioning.rule, ruleFor('megan@demo.34five.studio'));
   assert.equal(currentAddresses(x).length, 1);
   fail = false;
