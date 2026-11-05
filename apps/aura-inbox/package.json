@@ -2,7 +2,9 @@
   "name": "aura-inbox-test",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22.18.0" },
+  "engines": {
+    "node": ">=22.18.0"
+  },
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "dev:worker": "wrangler dev --local --port 8788",
@@ -11,7 +13,10 @@
     "build": "vite build",
     "check": "npm run typecheck && npm test && npm run build && wrangler deploy --dry-run",
     "deploy": "npm run build && wrangler deploy",
-    "llm:smoke": "node scripts/llm-smoke.mjs"
+    "llm:smoke": "node scripts/llm-smoke.mjs",
+    "demo:setup": "node scripts/setup-demo-auth.mjs",
+    "demo:worker": "wrangler dev --local --port 8788 --persist-to .wrangler/login-demo",
+    "demo": "npm run demo:setup && npm run build && npm run demo:worker"
   },
   "dependencies": {
     "dompurify": "^3.3.0",

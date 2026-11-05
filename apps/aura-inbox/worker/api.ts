@@ -1,9 +1,11 @@
+import { authenticationApi, sessionIdentity } from './session-auth.ts';
 import type { Env } from './types.ts';
 import { managementApi } from './management-api.ts';
 import { governanceApi } from './governance-api.ts';
 import { HttpError } from './types.ts';
 import { cursor, encodeCursor, json, pageSize, requireId } from './utils.ts';
 import { FAILURE_SUMMARIES, failureClass } from './llm/http.ts';
+import { auraConfig } from './llm/prompt.ts';
 
 type Row = Record<string, any>;
 
@@ -46,14 +48,16 @@ export async function api(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname.replace(/\/$/, '');
   const org = env.DEMO_ORG_ID;
+  if(path==='/api/auth'||path.startsWith('/api/auth/')) return authenticationApi(request,env);
+  const identity=env.DEMO_LOGIN_ENABLED!=='false'?await sessionIdentity(request,env):null;
   if (path === '/api/manage' || path.startsWith('/api/manage/')) return managementApi(request,env);
   if (path === '/api/health' && request.method === 'GET') {
     await env.DB.prepare('SELECT 1').first();
-    return json({ status: 'ok', mode: 'public-test', organization: org });
+    return json({ status: 'ok', mode: identity?'authenticated-demo':'public-test', organization: org });
   }
   if (path === '/api/auras' && request.method !== 'GET') return json({error:'Method not allowed.'},405);
   if (path === '/api/auras') {
-    const { results } = await env.DB.prepare(`SELECT a.id, a.name,
+    const { results } = await env.DB.prepare(`SELECT a.*,
       (SELECT p.tier FROM email_aura_policies p WHERE p.org_id=a.org_id AND p.aura_id=a.id) AS tier,
       (SELECT COUNT(*) FROM email_reviews r JOIN email_messages m ON m.org_id=r.org_id AND m.aura_id=r.aura_id AND m.id=r.message_id WHERE r.org_id=a.org_id AND r.aura_id=a.id AND r.status='pending' AND m.status IN ('draft','queued')) AS pending_count,
       (SELECT COUNT(*) FROM email_threads t WHERE t.org_id=a.org_id AND t.aura_id=a.id) AS thread_count,
@@ -63,12 +67,15 @@ export async function api(request: Request, env: Env): Promise<Response> {
       FROM email_address_assignments x JOIN email_addresses e ON e.org_id=x.org_id AND e.id=x.address_id
       JOIN email_domains d ON d.org_id=e.org_id AND d.id=e.domain_id
       WHERE x.org_id=? AND x.ended_at IS NULL ORDER BY d.status='active' DESC, e.address`).bind(org).all<Row>();
-    return json({ auras: results.map(row => ({ ...row, addresses: addresses.results.filter(a => a.aura_id === row.id) })) });
+    const assigned=new Set(identity?.role==='reviewer'?(await env.DB.prepare('SELECT aura_id FROM email_aura_reviewers WHERE org_id=? AND member_id=? AND revoked_at IS NULL').bind(org,identity.member_id).all<{aura_id:string}>()).results.map(a=>a.aura_id):[]);
+    const visible=identity?.role==='reviewer'?results.filter(row=>assigned.has(String(row.id))):results;
+    return json({ auras: visible.map(row => ({ id:row.id,name:row.name,role:auraConfig(row).role,tier:row.tier,pending_count:row.pending_count,thread_count:row.thread_count,message_count:row.message_count,addresses: addresses.results.filter(a => a.aura_id === row.id) })) });
   }
   const parts = path.split('/').filter(Boolean);
   if (parts[0] !== 'api' || parts[1] !== 'auras' || !parts[2]) throw new HttpError(404, 'Endpoint not found.');
   const auraId = requireId(parts[2]);
   const selectedAura = await aura(env, auraId);
+  if(identity?.role==='reviewer' && !await env.DB.prepare('SELECT 1 FROM email_aura_reviewers WHERE org_id=? AND aura_id=? AND member_id=? AND revoked_at IS NULL').bind(org,auraId,identity.member_id).first()) throw new HttpError(404,'Aura not found.');
   const governance = await governanceApi(request,env,auraId,parts);
   if (governance) return governance;
   if (request.method !== 'GET') return json({error:'Method not allowed.'},405);

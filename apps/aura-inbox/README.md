@@ -2,11 +2,13 @@
 
 An inbox and email governance console for four demo Auras, with real incoming email. One Cloudflare Worker serves the React/Vite UI and `/api` endpoints.
 
-This is a public test deployment with no login. `DEMO_ORG_ID` limits all queries and inbound routing to `org_demo_001`. It is not authentication. Use test messages only. Management requires a server secret and a server-selected active reviewer. Full user authentication is still required before using customer data.
+The current configuration requires email-and-password login for all inbox and management APIs. Login is enabled by default. `DEMO_LOGIN_ENABLED=true` explicitly enables fixed Admin, Manager, and Reviewer demo accounts. `DEMO_ORG_ID` selects the workspace. Use test messages only. The shared dummy accounts are for the demo workspace, not customer access.
 
 Deployed at https://aura-inbox-test.cassius-kellogg.workers.dev. The API uses the same origin under `/api`.
 
 ## Run locally
+
+For the authenticated demo, run `npm run demo` from this directory. It initializes a separate local database, builds the UI, and serves [the login screen](http://127.0.0.1:8788). See **Demo login and fixed roles** below for accounts and restart commands.
 
 Use Node 22.18 or later. The integration tests need Node 24 or later for `node:sqlite`.
 
@@ -37,10 +39,12 @@ Email HTML becomes text. Scripts, remote images, and interactive email content d
 
 Cloudflare Email Routing sends the four test aliases to `aura-inbox-test`:
 
-- `support-test@34five.studio` → existing `aura_demo_001` (Customer Support Aura, Tier 1).
-- `sales-test@34five.studio` → existing `aura_demo_002` (Sales Aura, Tier 2).
-- `operations-test@34five.studio` → `aura_demo_003` (Operations Aura, Tier 3).
-- `notifications-test@34five.studio` → `aura_demo_004` (Notifications Aura, Tier 4).
+- `lyra@34five.studio` → existing `aura_demo_001` (Lyra, customer support specialist, Tier 1).
+- `nova@34five.studio` → existing `aura_demo_002` (Nova, sales advisor, Tier 2).
+- `atlas@34five.studio` → `aura_demo_003` (Atlas, operations coordinator, Tier 3).
+- `iris@34five.studio` → `aura_demo_004` (Iris, communications coordinator, Tier 4).
+
+Merlin remains the general assistant at `merlin@34five.studio`, served by its existing `aura-inbox-demo` Worker. Its route stays separate.
 
 The existing `spike-test` and `anthony` routes and catch-all remain unchanged.
 
@@ -77,9 +81,31 @@ npm run llm:smoke -- "hello"
 npm run llm:smoke -- --model anthropic:claude-sonnet-4-5 "hello"
 ```
 
-The prompt uses the Aura's name, any role, facet, personality, and blocklist (topics to decline) on its row, plus the thread's received and sent messages with quoted history removed. HTML-only mail is converted to text. A thread is limited to 24000 characters: the oldest messages drop first, and the email being answered is always kept. Thread content is wrapped as untrusted data. Attachments are not read: the reply acknowledges them and sends no file back.
+The prompt uses the Aura's name, any role, facet, personality, system instructions, and blocklist (topics to decline) on its row, plus the thread's received and sent messages with quoted history removed. HTML-only mail is converted to text. A thread is limited to 24000 characters: the oldest messages drop first, and the email being answered is always kept. Thread content is wrapped as untrusted data. Attachments are not read: the reply acknowledges them and sends no file back.
 
-The demo uses a neutral system instruction plus whatever config the Aura's row holds. Empty fields are left out, and nothing here adds a voice or tone. The bound `auras` table currently has only `id`, `org_id`, and `name`, so replies use the Aura's name and the email rules alone. The authoritative source for Aura configuration is to be agreed with 34Five (AXI-24).
+The 345 team's existing persona instructions are the intended source (AXI-24). Until they arrive, `worker/llm/demo-personas.ts` supplies temporary hardcoded personalities:
+
+- Lyra (Tier 1): patient, empathetic, and reassuring.
+- Nova (Tier 2): curious, upbeat, and thoughtful.
+- Atlas (Tier 3): calm, methodical, and dependable.
+- Iris (Tier 4): bright, observant, and concise.
+- Merlin: warm, friendly, and approachable.
+
+Each demo Aura has a role, a personal name, a personality, and a separate sending tier. Roles and voices apply only to known Aura IDs in `org_demo_001`, including after a name change. Other Auras receive no default personality. Stored roles take precedence over demo roles. A stored `facet`, `personality`, `system_instructions`, or a role different from the demo role replaces the temporary voice. The seeded demo role keeps its matching personality. The prompt passes stored instructions through without rewriting them. Blocklists and email rules still apply. The prompt boundary supports the team's configuration but does not connect to their source yet.
+
+The email migration adds a nullable `role` column when the bound `auras` table lacks it. It fills blank roles for the five demo identities and preserves custom roles. Other optional persona fields work when the source supplies them. Hardcoded personalities affect LLM mode only. Fixed reply mode keeps its test response.
+
+To update existing demo names, roles, and email addresses without changing policies or message history:
+
+```sh
+node scripts/migrate-persona-emails.mjs --remote
+```
+
+Omit `--remote` for local D1. Use `--persist-to .wrangler/login-demo` for the authenticated local demo. `npm run demo:setup` also applies this migration.
+
+Address identities are immutable. The migration reserves new addresses, assigns them to the existing Auras, closes old assignments, and disables old addresses. Historical message addresses and references stay unchanged. It preserves custom names, custom roles, all policy versions, and Merlin's existing address. Reruns are idempotent. Ownership conflicts, unsent messages from old aliases, or concurrent edits abort the change. Wrangler executes the SQL file as one transaction.
+
+Coordinate the database migration with the Worker sender allowlist and four Cloudflare routing rules. The database command does not deploy code or update routes. Keep the other Workers and catch-all unchanged. `scripts/provision-personas.mjs` remains available for name-only updates.
 
 Replies are capped at 1024 output tokens and 2000 characters at a sentence boundary. A reply cut off by the token limit is still sent, trimmed to its last complete sentence.
 
@@ -122,7 +148,9 @@ To verify externally, send a test email to each alias. Confirm the message appea
 
 ## Governance management
 
-Click **Manage governance** and enter `GOVERNANCE_ADMIN_TOKEN`. The UI keeps it in React memory across workspace pages and discards it on refresh or Lock management. It never stores the credential in a URL or browser storage. Configure it with `wrangler secret put GOVERNANCE_ADMIN_TOKEN`. `GOVERNANCE_REVIEWER_MEMBER_ID` identifies the existing demo member on the server. Request bodies cannot select an approver. All management reads require the credential and current workspace membership. Mutations require a same-origin request. Governance decisions and policy changes also require an active designated reviewer. The credential grants workspace administration for Aura configuration and reviewer assignments.
+Sign in once, then open **Manage governance**. The server uses the session identity for all actions. Request bodies cannot select the acting member or organization. Governance still requires an active designated reviewer. The demo setup assigns all three demo users to the existing Auras.
+
+The browser sends an HttpOnly session cookie. Refresh preserves the session, and Sign out revokes it on the server. Passwords and session tokens are not stored in browser local storage. Legacy bearer management access remains available only when `DEMO_LOGIN_ENABLED` is disabled. It cannot bypass session authentication in the supplied configuration.
 
 The console provides review and rejection, a separate Send email action, draft editing and reevaluation, tier settings, daily limits, Tier 4 Cc/Bcc, new outgoing conversations, and the latest 100 review revisions. Open the Conversations tab on the Governance page to reset a review requirement. A reset preserves sent history and supersedes unsent decisions. Editing content or changing policy invalidates old approvals. An unchanged rejected draft stays rejected.
 
@@ -157,6 +185,7 @@ Do not import the parent fixture, local seed or schema migrations into the popul
 - `/` is the inbox. It links to management and retains conversation deep links through `?aura=...&thread=...`.
 - `/governance` has an Aura picker, policy creation/update/removal, reviews, draft cancellation, compose and conversation resets. Policy removal pauses outgoing sends. It preserves the policy row with a higher version, so recreating a policy cannot revive old decisions.
 - `/auras` provides Aura creation, reading, renaming and deletion of unused Auras. It also provides reviewer assignment/revocation and address enable/disable controls. New Auras default to Tier 1 and designate the configured manager as reviewer. New Aura creation does not provision a mail address or Cloudflare route.
+- `/users` provides the Admin-only user directory and access history. It is read-only in the fixed-role demo.
 - `/email-settings` provides domain-level DKIM setup instructions, exact provider-issued records, copy controls and live DNS verification. All Auras on a domain share its setup. Key generation and DNS changes remain in Cloudflare. The app never accepts a private signing key.
 
 Aura deletion refuses any message/thread or address assignment history. Disabling an assigned address preserves its assignment and mail history, rejects incoming mail for that address and blocks sends. Disabling and re-enabling an address cannot revive old approvals. Reviewer revocation similarly supersedes that reviewer’s unsent approvals. Workspace administration remains available to reassign a reviewer if the manager removes their own reviewer designation.
@@ -198,9 +227,9 @@ The Worker uses these variables:
 
 Use a token with access to the required account/zones and Zone Read/Edit, Email Routing and Email Sending operations. Cloudflare also requires the account's Email Sending entitlement. A failed request shows its method, path, HTTP status and provider error codes. It does not expose provider error text or credentials. Confirm the exact permission needed from the failed operation before expanding a token.
 
-The existing management credential and server-selected workspace member protect all domain endpoints. Mutations require the same origin. The organization coordinator serializes them with the app's other management changes. Do not call the mutation service concurrently outside that coordinator.
+An active Admin or Manager credential protects all domain endpoints. Mutations require the same origin. The organization coordinator serializes them with the app's other management changes. Do not call the mutation service concurrently outside that coordinator.
 
-This is the existing fixed demo administrator model. It can adopt an exact existing zone in the configured Cloudflare account. Account ownership does not prove a customer's entitlement to that zone. Before a multi-tenant production rollout, require an operator-approved adoption list or tenant-specific ownership proof.
+The app uses the configured demo organization. An Admin or Manager can adopt an exact existing zone in the configured Cloudflare account. Account ownership does not prove a customer's entitlement to that zone. Before a multi-tenant production rollout, require an operator-approved adoption list or tenant-specific ownership proof.
 
 ### Registry interface
 
@@ -248,3 +277,84 @@ Local tests use the real SQLite schema and foreign keys plus a mocked Cloudflare
 - TypeScript, the Vite build and Wrangler deployment dry run pass.
 - Browser checks against disposable local D1 data cover management unlock, the nameserver display, domain creation, setup failures, retry and confirmed soft removal.
 - No deployment, remote D1 change, customer DNS delegation or external mail test was performed for this change.
+
+
+## Demo login and fixed roles
+
+The app requires login before showing inbox or management content. All `/api` inbox, message-body, attachment, governance, and management routes require a valid session. Login, session status, and logout use the authentication endpoints below.
+
+The local demo provides these shared dummy accounts:
+
+| Role | Email | Password |
+| --- | --- | --- |
+| Admin | `admin@345.demo` | `Admin345!Demo` |
+| Manager | `manager@345.demo` | `Manager345!Demo` |
+| Reviewer | `reviewer@345.demo` | `Reviewer345!Demo` |
+
+Admin can read the user directory and configure Auras, domains, and policies. Manager can configure Auras, domains, and policies. Reviewer can read assigned inboxes, review drafts, approve or reject, and send approved messages. Reviewers cannot configure policies, compose or edit drafts, cancel drafts, reset conversations, or manage users. The API enforces each restriction. It also hides unassigned Auras and rejects direct message or attachment access through an unassigned Aura.
+
+The three account roles are fixed on the server. The Admin directory has no add, edit, suspension, credential reset, or role-change controls. User mutation endpoints reject requests in demo login mode, including requests from Admin. This demo does not include custom permission editing, self-signup, mailbox verification, password recovery, or SSO.
+
+### Start or reset the local demo
+
+From `apps/aura-inbox`:
+
+```sh
+npm run demo
+```
+
+This command initializes the isolated `.wrangler/login-demo` state directory, creates any missing local schema, provisions the three accounts, builds the frontend, and starts the app on `http://127.0.0.1:8788`.
+
+To restart with existing accounts and sessions:
+
+```sh
+npm run demo:worker
+```
+
+To restore the dummy passwords and revoke existing demo sessions:
+
+```sh
+npm run demo:setup
+```
+
+Setup accepts no remote or custom database options. It preserves email history and existing policy settings. It checks demo account and Aura ownership before provisioning. It assigns the three accounts as designated reviewers for the organization's existing Auras. Reprovisioning revokes existing sessions and legacy credentials, resets login-attempt limits, and supersedes approved unsent decisions made by the dummy accounts.
+
+Existing `studio_members.role` values stay unchanged. New parent memberships use the base `member` role. App roles live in `email_workspace_access`. Demo session validation also requires the expected fixed role for that member ID.
+
+### Sessions and password checks
+
+Passwords use per-account random salts and PBKDF2-SHA-256 with 100,000 iterations. D1 stores no plaintext passwords. Session tokens contain 256 random bits, and D1 stores only their SHA-256 hashes. A session expires after eight hours. Login rotates a previous browser session, and logout deletes the current server session.
+
+Cookies use HttpOnly, SameSite=Strict, and Path=/. HTTPS responses also set Secure. HTTP login is permitted only on localhost or loopback addresses. Passwords and session tokens never enter browser URLs or browser storage.
+
+Login, logout, and API mutations require the exact same origin. Failed login responses do not reveal whether an account exists. Persistent limits allow 10 attempts per normalized login and 30 per client address per 15-minute window. Successful attempts also count. Expired limiter and session rows are removed during login. The organization coordinator serializes login and session operations with management changes.
+
+### Migration and rollout order
+
+Apply `scripts/0003_email_workspace_access.sql`, then `scripts/0004_email_workspace_login.sql`, before deploying code with `DEMO_LOGIN_ENABLED=true`. Both migrations add tables and indexes without rebuilding email history. Provision approved login identities before enabling access. Management or login returns `503` when its required schema is missing.
+
+The local setup command handles these prerequisites in isolated local storage. For an approved remote demo rollout, apply the two additive migrations and provision authentication only:
+
+```sh
+npx wrangler d1 execute DB --remote --file ../../scripts/0003_email_workspace_access.sql
+npx wrangler d1 execute DB --remote --file ../../scripts/0004_email_workspace_login.sql
+node scripts/provision-demo-logins.mjs --remote
+npm run build
+npx wrangler deploy --keep-vars
+```
+
+The remote provisioner inspects the actual membership schema, including the minimal live table with required name and no role column. It preserves existing member details, credentials, sessions, policy settings, messages, approvals, and reviewer revocations. It adds only missing demo access records, passwords, and reviewer assignments for the four named demo Auras. Reruns never reset passwords. Conflicting identities or unsupported parent columns stop provisioning. No local fixture or persona/address migration runs through this command.
+
+Inspect the live Worker settings before deploying. Preserve its existing secrets, non-authentication variables, resource bindings, sender allowlist, runtime settings, workers.dev setting, and email routes. The frontend assets intentionally change to include the login screen. Provision accounts before enabling login. No external email needs to be sent to verify authentication.
+
+Retain the additive access, login, session, and audit tables during an application rollback. Setting `DEMO_LOGIN_ENABLED=false` explicitly restores the legacy public test inbox and bearer management model. An older Worker also lacks the new session restrictions. The Python rules engine remains an E08 schema/rules reference and does not implement app authentication.
+
+### API and verification
+
+- `POST /api/auth/login` accepts `{email,password}` and returns the fixed user identity plus a session cookie.
+- `GET /api/auth/session` returns the current identity or `user:null` when signed out.
+- `POST /api/auth/logout` revokes the current session and clears the cookie.
+- `GET /api/manage/workspace` returns the authenticated member, role, and active reviewer assignments.
+- `GET /api/manage/users` returns the Admin directory and latest access audit events. User mutations are disabled in demo login mode.
+
+Authentication tests cover all three accounts, invalid passwords, normalized usernames, spoofed role and tenant fields, bearer bypass attempts, session refresh, logout, rotation, expiry, forged and duplicate cookies, cross-tenant access, suspension, fixed-role tampering, same-origin checks, throttling, migration constraints, and reseeding. Browser checks cover incorrect login, all three valid logins, refresh persistence, sign-out, the read-only Admin directory, Manager controls, and Reviewer page restrictions.

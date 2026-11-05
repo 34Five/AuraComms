@@ -10,7 +10,7 @@ export function setup(t) {
   const sql = new DatabaseSync(':memory:');
   t.after(() => sql.close());
   sql.exec('PRAGMA foreign_keys=ON;');
-  for (const path of ['tests/email/fixtures/studio_parents_2026_10_22.sql','scripts/0001_email_model.sql','scripts/email/seed.sql','scripts/0002_email_governance.sql']) {
+  for (const path of ['tests/email/fixtures/studio_parents_2026_10_22.sql','scripts/0001_email_model.sql','scripts/email/seed.sql','scripts/0002_email_governance.sql','scripts/0003_email_workspace_access.sql','scripts/0004_email_workspace_login.sql']) {
     sql.exec(readFileSync(new URL('../../../'+path,import.meta.url),'utf8'));
   }
   sql.exec("INSERT INTO auras (id,org_id,name) VALUES ('other_aura','other_org','Other organization');");
@@ -22,7 +22,7 @@ export function setup(t) {
   });
   const objects = new Map();
   const env = {
-    DEMO_ORG_ID: ORG, TEST_MODE:'true',
+    DEMO_ORG_ID: ORG, TEST_MODE:'true', DEMO_LOGIN_ENABLED:'false',
     DB: { prepare, async batch(statements) {
       sql.exec('BEGIN');
       try { const results=[]; for (const s of statements) results.push(await s.run()); sql.exec('COMMIT'); return results; }
@@ -53,7 +53,7 @@ export function enableReplies(x) {
   x.sql.exec("INSERT INTO email_aura_policies (org_id,aura_id,tier) VALUES ('org_demo_001','aura_demo_001','4'),('org_demo_001','aura_demo_002','4')");
   x.env.DEMO_ORG_ID='org_demo_001'; x.env.AUTO_REPLY_ENABLED='true';
   const replies=[];
-  return { replies, message(to='sales-test@34five.studio',id='reply-test@example.invalid',extra='',body='A new test message.') {
+  return { replies, message(to='nova@34five.studio',id='reply-test@example.invalid',extra='',body='A new test message.') {
     const m=email(to,id,extra,body);
     m.reply=async value=>{ replies.push(value); return {messageId:`<out-${replies.length}@cloudflare.example>`}; };
     return m;

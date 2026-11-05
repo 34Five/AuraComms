@@ -1,8 +1,9 @@
 import { splitQuotedText } from '../../frontend/src/quoted-text.ts';
 import type { Env } from '../types.ts';
 import type { LlmPrompt } from './provider.ts';
+import { demoPersona } from './demo-personas.ts';
 
-export type AuraConfig = { name: string; role: string | null; facet: string | null; personality: string | null; blocklist: string | null };
+export type AuraConfig = { name: string; role: string | null; facet: string | null; personality: string | null; blocklist: string | null; system_instructions?: string | null };
 export type ThreadMessage = { direction: 'in' | 'out'; sender: string; subject: string | null; text: string | null };
 
 const MAX_THREAD_MESSAGES = 20;
@@ -66,11 +67,13 @@ function blockedTopics(value: string | null): string {
   } catch { return ''; }
 }
 
-// Live D1 has only id, org_id and name on auras, so every config column is optional. An Aura is its own persona:
-// nothing here supplies a voice that its own configuration did not.
+// Live D1 has only id, org_id and name. Imported persona fields supersede the temporary demo voice as a unit.
 export function auraConfig(row: Record<string, unknown>): AuraConfig {
   const text = (value: unknown) => typeof value === 'string' && value.trim() ? value : null;
-  return { name: String(row.name), role: text(row.role), facet: text(row.facet), personality: text(row.personality), blocklist: text(row.blocklist) };
+  const role = text(row.role), facet = text(row.facet), personality = text(row.personality), system_instructions = text(row.system_instructions);
+  const demo = demoPersona(row);
+  const fallback = facet || personality || system_instructions || (role && role !== demo?.role) ? null : demo;
+  return { name: String(row.name), role: role ?? demo?.role ?? null, facet, personality: personality ?? fallback?.personality ?? null, blocklist: text(row.blocklist), system_instructions };
 }
 
 function buildSystem(aura: AuraConfig): string {
@@ -81,6 +84,7 @@ function buildSystem(aura: AuraConfig): string {
     ...field('Role', aura.role),
     ...field('Facet', aura.facet),
     ...field('Personality', aura.personality),
+    ...field('System instructions', aura.system_instructions ?? null),
     ...(topics ? [`Topics to decline: ${topics}.`] : []),
     '',
     'Rules for the reply:',

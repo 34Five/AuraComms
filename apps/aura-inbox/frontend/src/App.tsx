@@ -1,3 +1,4 @@
+import { workspaceFetch, type User } from './auth';
 import { TIER_LABELS } from './GovernancePanel';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import DOMPurify from 'dompurify';
@@ -29,7 +30,7 @@ function Icon({ name, size = 20 }: { name: string; size?: number }) {
 }
 
 async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
-  const response = await fetch(path, { signal, cache: 'no-store' });
+  const response = await workspaceFetch(path, { signal, cache: 'no-store' });
   const data = await response.json() as T & { error?: string };
   if (!response.ok) throw new Error(data.error || 'Unable to load your inbox.');
   return data;
@@ -91,7 +92,7 @@ function MessageCard({ message: m, auraId }: { message: Message; auraId: string 
   </article>;
 }
 
-export function App({navigate}: {navigate:(path:string)=>void}) {
+export function App({navigate,user,onLogout,logoutBusy}: {navigate:(path:string)=>void;user:User;onLogout:()=>void;logoutBusy:boolean}) {
   const [auras,setAuras] = useState<Aura[]>([]);
   const [auraId,setAuraId] = useState(new URLSearchParams(location.search).get('aura') || '');
   const [threadId,setThreadId] = useState(new URLSearchParams(location.search).get('thread') || '');
@@ -209,12 +210,12 @@ export function App({navigate}: {navigate:(path:string)=>void}) {
   return <div className={`app ${threadId ? 'has-conversation' : ''}`}>
     <aside className="sidebar">
       <a href="/" className="brand">34Five<small>Aura inbox</small></a>
-      <nav className="workspace-nav" aria-label="Workspace pages"><a className="active" href="/" aria-current="page" onClick={e=>{e.preventDefault();navigate('/');}}>Inbox</a><a href="/governance" onClick={e=>{e.preventDefault();navigate(`/governance?aura=${auraId}`);}}>Governance</a><a href="/auras" onClick={e=>{e.preventDefault();navigate('/auras');}}>Aura management</a><a href="/email-settings" onClick={e=>{e.preventDefault();navigate('/email-settings');}}>Company email domains</a></nav>
+      <nav className="workspace-nav" aria-label="Workspace pages"><a className="active" href="/" aria-current="page" onClick={e=>{e.preventDefault();navigate('/');}}>Inbox</a><a href="/governance" onClick={e=>{e.preventDefault();navigate(`/governance?aura=${auraId}`);}}>Governance</a>{user.role!=='reviewer'&&<><a href="/auras" onClick={e=>{e.preventDefault();navigate('/auras');}}>Aura management</a><a href="/email-settings" onClick={e=>{e.preventDefault();navigate('/email-settings');}}>Company email domains</a></>}{user.role==='admin'&&<a href="/users" onClick={e=>{e.preventDefault();navigate('/users');}}>User management</a>}</nav>
       <div className="section-label">Aura inboxes</div>
       <nav className="aura-nav" aria-label="Aura inboxes">{auras.map((a,index) => <button key={a.id} className={`aura-button ${a.id === auraId ? 'active' : ''}`} onClick={() => { setAuraId(a.id); setThreadId(''); setSearch(''); setStatus(''); }} aria-current={a.id === auraId ? 'page' : undefined}>
         <span className={`aura-avatar tone-${index%3}`}>{initials(a.name.replace(' Aura',''))}</span><span className="aura-label"><strong>{a.name.replace(/ Aura$/,'')}</strong><small>{a.addresses.find(x => x.domain_status === 'active')?.address || 'No receiving address'}</small></span><span className="aura-count">{a.tier && <span className="sidebar-tier" title={TIER_LABELS[a.tier]}>T{a.tier}</span>}{a.pending_count > 0 ? `${a.pending_count} pending` : a.thread_count}</span>
       </button>)}</nav>
-      <div className="test-note"><strong>Test workspace</strong> Public access. Use test messages only.</div>
+      <div className="test-note"><strong>{user.name}</strong>{user.role[0].toUpperCase()+user.role.slice(1)} · Demo workspace<button className="sidebar-signout" disabled={logoutBusy} onClick={onLogout}>{logoutBusy?'Signing out…':'Sign out'}</button></div>
     </aside>
     <main className="main">
       <header className="topbar">

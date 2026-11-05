@@ -1,5 +1,6 @@
 export interface Env {
   DB: D1Database;
+  DEMO_LOGIN_ENABLED?: string;
   CLOUDFLARE_DOMAIN_API_TOKEN?: string;
   CLOUDFLARE_ACCOUNT_ID?: string;
   DEFAULT_EMAIL_DOMAIN?: string;

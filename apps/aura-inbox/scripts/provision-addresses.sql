@@ -8,25 +8,25 @@ VALUES ('domain_34five_inbox_test','org_demo_001','34five.studio','34five.studio
 ON CONFLICT(domain_key) DO NOTHING;
 
 INSERT INTO email_addresses (id,org_id,domain_id,local_part,address,address_key)
-SELECT 'address_support_test','org_demo_001',id,'support-test','support-test@34five.studio','support-test@34five.studio'
+SELECT 'address_lyra','org_demo_001',id,'lyra','lyra@34five.studio','lyra@34five.studio'
 FROM email_domains WHERE domain_key='34five.studio' AND org_id='org_demo_001' AND status='active'
 ON CONFLICT(address_key) DO NOTHING;
 INSERT INTO email_addresses (id,org_id,domain_id,local_part,address,address_key)
-SELECT 'address_sales_test','org_demo_001',id,'sales-test','sales-test@34five.studio','sales-test@34five.studio'
+SELECT 'address_nova','org_demo_001',id,'nova','nova@34five.studio','nova@34five.studio'
 FROM email_domains WHERE domain_key='34five.studio' AND org_id='org_demo_001' AND status='active'
 ON CONFLICT(address_key) DO NOTHING;
 
 INSERT INTO email_address_assignments (id,org_id,address_id,aura_id,assigned_at,reason)
-SELECT 'assignment_support_test','org_demo_001',a.id,'aura_demo_001',strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+SELECT 'assignment_lyra','org_demo_001',a.id,'aura_demo_001',strftime('%Y-%m-%dT%H:%M:%fZ','now'),
   'Real incoming email for the read-only Aura inbox test'
 FROM email_addresses a JOIN auras u ON u.org_id=a.org_id AND u.id='aura_demo_001'
-WHERE a.org_id='org_demo_001' AND a.address_key='support-test@34five.studio' AND a.status='active'
+WHERE a.org_id='org_demo_001' AND a.address_key='lyra@34five.studio' AND a.status='active'
   AND NOT EXISTS (SELECT 1 FROM email_address_assignments x WHERE x.org_id=a.org_id AND x.address_id=a.id AND x.ended_at IS NULL)
 ON CONFLICT(id) DO NOTHING;
 INSERT INTO email_address_assignments (id,org_id,address_id,aura_id,assigned_at,reason)
-SELECT 'assignment_sales_test','org_demo_001',a.id,'aura_demo_002',strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+SELECT 'assignment_nova','org_demo_001',a.id,'aura_demo_002',strftime('%Y-%m-%dT%H:%M:%fZ','now'),
   'Real incoming email for the read-only Aura inbox test'
 FROM email_addresses a JOIN auras u ON u.org_id=a.org_id AND u.id='aura_demo_002'
-WHERE a.org_id='org_demo_001' AND a.address_key='sales-test@34five.studio' AND a.status='active'
+WHERE a.org_id='org_demo_001' AND a.address_key='nova@34five.studio' AND a.status='active'
   AND NOT EXISTS (SELECT 1 FROM email_address_assignments x WHERE x.org_id=a.org_id AND x.address_id=a.id AND x.ended_at IS NULL)
 ON CONFLICT(id) DO NOTHING;

@@ -6,7 +6,7 @@ export type Policy = { tier: string; version: number; rules: Rules };
 const encoder = new TextEncoder();
 const fields = ['from_address','from_name','envelope_from','envelope_to','subject','reply_to_json','body_storage',
   'body_text','body_html','body_r2_key','body_size_bytes','in_reply_to','references_json','rfc_message_id'];
-export const TEST_ADDRESSES = ['support-test@34five.studio','sales-test@34five.studio','operations-test@34five.studio','notifications-test@34five.studio'];
+export const TEST_ADDRESSES = ['lyra@34five.studio','nova@34five.studio','atlas@34five.studio','iris@34five.studio'];
 export function canonical(value: any): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
   if (value && typeof value === 'object') return `{${Object.keys(value).sort().map(k => `${JSON.stringify(k)}:${canonical(value[k])}`).join(',')}}`;
@@ -50,7 +50,8 @@ export class Governance {
   async reviewer(aura: string, member: string) {
     if (!member) throw new HttpError(403,'No reviewer is configured.');
     const row = await this.q(`SELECT r.member_id FROM email_aura_reviewers r JOIN studio_members m ON m.org_id=r.org_id AND m.member_id=r.member_id
-      WHERE r.org_id=? AND r.aura_id=? AND r.member_id=? AND r.revoked_at IS NULL`,this.org,aura,member).first();
+      LEFT JOIN email_workspace_access a ON a.org_id=m.org_id AND a.member_id=m.member_id
+      WHERE r.org_id=? AND r.aura_id=? AND r.member_id=? AND r.revoked_at IS NULL AND (a.member_id IS NULL OR a.status='active')`,this.org,aura,member).first();
     if (!row) throw new HttpError(403,'An active designated reviewer is required.');
   }
   async policyConfig(aura: string) {

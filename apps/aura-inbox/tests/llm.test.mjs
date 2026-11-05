@@ -165,7 +165,7 @@ test('sanitising strips control characters, redacts key material, and caps the l
 
 const thread = [
   { direction: 'in', sender: 'Alex <alex@example.invalid>', subject: 'Pricing', text: 'What does it cost?' },
-  { direction: 'out', sender: 'Sales Aura <sales-test@34five.studio>', subject: 'Re: Pricing', text: 'Happy to help.\n\nSales Aura' },
+  { direction: 'out', sender: 'Sales Aura <nova@34five.studio>', subject: 'Re: Pricing', text: 'Happy to help.\n\nSales Aura' },
   { direction: 'in', sender: 'Alex <alex@example.invalid>', subject: 'Re: Pricing', text: 'Thanks. Any discount?' },
 ];
 
@@ -368,7 +368,7 @@ test('llm mode sends the generated text through the existing path and records it
   assert.equal(calls.length, 1); assert.equal(demo.replies.length, 1);
   const reply = demo.replies[0];
   assert.equal(reply.text, 'Thanks for writing in.\n\nSales Aura');
-  assert.equal(reply.from.email, 'sales-test@34five.studio'); assert.equal(reply.subject, 'Re: New inquiry');
+  assert.equal(reply.from.email, 'nova@34five.studio'); assert.equal(reply.subject, 'Re: New inquiry');
   assert.deepEqual(reply.headers, { 'Auto-Submitted': 'auto-replied', 'X-Auto-Response-Suppress': 'All', 'X-Aura-Demo': 'true', 'In-Reply-To': '<reply-test@example.invalid>', References: '<reply-test@example.invalid>' });
   assert.equal(reply.attachments, undefined);
   const row = x.sql.prepare("SELECT * FROM email_messages WHERE org_id='org_demo_001' AND direction='out'").get();
@@ -418,7 +418,7 @@ test('a mention of attachments sends no sample file in llm mode, but stays in fi
 
 function htmlMessage(demo, id, html) {
   const m = demo.message(undefined, id);
-  const raw = `From: Alex <alex@example.invalid>\r\nTo: sales-test@34five.studio\r\nSubject: New inquiry\r\nMessage-ID: <${id}>\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=utf-8\r\n\r\n${html}`;
+  const raw = `From: Alex <alex@example.invalid>\r\nTo: nova@34five.studio\r\nSubject: New inquiry\r\nMessage-ID: <${id}>\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=utf-8\r\n\r\n${html}`;
   m.raw = new Response(raw).body; m.rawSize = raw.length;
   return m;
 }
@@ -443,7 +443,7 @@ test('a large html-only body in R2 reaches the model as text', async t => {
 
 function withAttachment(demo, disposition, id = 'attached@example.invalid') {
   const m = demo.message(undefined, id);
-  const raw = `From: Alex <alex@example.invalid>\r\nTo: sales-test@34five.studio\r\nSubject: New inquiry\r\nMessage-ID: <${id}>\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=test\r\n\r\n--test\r\nContent-Type: text/plain\r\n\r\nSee attached.\r\n--test\r\nContent-Type: application/pdf\r\nContent-Disposition: ${disposition}; filename="file.pdf"\r\nContent-ID: <logo@example.invalid>\r\nContent-Transfer-Encoding: base64\r\n\r\nAAAA\r\n--test--\r\n`;
+  const raw = `From: Alex <alex@example.invalid>\r\nTo: nova@34five.studio\r\nSubject: New inquiry\r\nMessage-ID: <${id}>\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=test\r\n\r\n--test\r\nContent-Type: text/plain\r\n\r\nSee attached.\r\n--test\r\nContent-Type: application/pdf\r\nContent-Disposition: ${disposition}; filename="file.pdf"\r\nContent-ID: <logo@example.invalid>\r\nContent-Transfer-Encoding: base64\r\n\r\nAAAA\r\n--test--\r\n`;
   m.raw = new Response(raw).body; m.rawSize = raw.length;
   return m;
 }
@@ -490,7 +490,7 @@ test('a body stored in R2 reaches the prompt', async t => {
 test('an address disabled during generation cancels the reply', async t => {
   const x = setup(t), demo = llmMode(x);
   mockFetch(t, () => {
-    x.sql.exec("UPDATE email_addresses SET status='disabled',disabled_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE address_key='sales-test@34five.studio'");
+    x.sql.exec("UPDATE email_addresses SET status='disabled',disabled_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE address_key='nova@34five.studio'");
     return respond(gemini('Hello.'));
   });
   await receive(demo.message(), x.env);
@@ -656,7 +656,7 @@ function liveAuraShape(x) {
   assert.deepEqual(x.sql.prepare('PRAGMA table_info(auras)').all().map(c => c.name).sort(), ['id', 'name', 'org_id']);
 }
 
-test('the live three-column auras table still produces a reply from the name alone', async t => {
+test('the live three-column auras table uses the temporary demo personality', async t => {
   const x = setup(t), demo = llmMode(x);
   liveAuraShape(x);
   const calls = mockFetch(t, () => respond(gemini('Hello.\n\nSales Aura')));
@@ -665,16 +665,21 @@ test('the live three-column auras table still produces a reply from the name alo
   assert.equal(x.sql.prepare("SELECT status FROM email_messages WHERE org_id='org_demo_001' AND direction='out'").get().status, 'sent');
   const system = calls[0].body.systemInstruction.parts[0].text;
   assert.ok(system.includes('Sales Aura'));
-  assert.ok(!/Role:|Facet:|Personality:|Topics to|null|undefined/.test(system));
+  assert.match(system, /Personality: You are curious, upbeat, and thoughtful/);
+  assert.match(system, /Role: Sales advisor/);
+  assert.ok(!/Facet:|Topics to|null|undefined/.test(system));
   assert.match(calls[0].url, /models\/gemini-test:generateContent/);
 });
 
-test('blank config values on the row are omitted, not substituted', async t => {
+test('blank persona fields use the temporary demo personality', async t => {
   const x = setup(t), demo = llmMode(x);
   x.sql.exec(`UPDATE auras SET role='   ', facet='', personality=NULL, blocklist='[]' WHERE id='aura_demo_002'`);
   const calls = mockFetch(t, () => respond(gemini('Hello.')));
   await receive(demo.message(), x.env);
-  assert.ok(!/Role:|Facet:|Personality:|Topics to/.test(calls[0].body.systemInstruction.parts[0].text));
+  const system = calls[0].body.systemInstruction.parts[0].text;
+  assert.match(system, /Personality: You are curious, upbeat, and thoughtful/);
+  assert.match(system, /Role: Sales advisor/);
+  assert.ok(!/Facet:|Topics to/.test(system));
 });
 
 test('the prompt adds no tone or sales behaviour of its own', () => {
@@ -690,7 +695,7 @@ function seedReplies(x, count, sender, createdAt, prefix = 'reply_llm_') {
   const now = new Date().toISOString();
   x.sql.exec(`INSERT OR IGNORE INTO email_threads (id,org_id,aura_id,last_activity_at,created_at) VALUES ('seed_thread','org_demo_001','aura_demo_002','${now}','${now}')`);
   const insert = x.sql.prepare(`INSERT INTO email_messages (id,org_id,aura_id,thread_id,email_address_id,address_assignment_id,direction,status,send_idempotency_key,envelope_to,from_address,sent_at,activity_at,created_at)
-    VALUES (?,'org_demo_001','aura_demo_002','seed_thread','address_sales_test','assignment_sales_test','out','sent',?,?,'sales-test@34five.studio',?,?,?)`);
+    VALUES (?,'org_demo_001','aura_demo_002','seed_thread','address_nova','assignment_nova','out','sent',?,?,'nova@34five.studio',?,?,?)`);
   for (let i = 0; i < count; i++) {
     const id = `${prefix}${`seed_${sender}_${createdAt}_${i}`.replace(/[^A-Za-z0-9_]/g, '_')}`;
     insert.run(id, id, sender, now, now, createdAt);
