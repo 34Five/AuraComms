@@ -54,7 +54,7 @@ for(const tier of ['1','4'])test(`generated Tier ${tier} address receives mail, 
   const g=new Governance(x.env);await g.decide(id,review.id,'e07_demo_reviewer','approved');await g.dispatch(id,review.id);
  }
  const sent=x.sql.prepare('SELECT * FROM email_messages WHERE id=?').get(draft.id);assert.equal(sent.status,'sent');
- const send=calls.find(c=>c.url.endsWith('/email/sending/send'));assert.equal(send.body.from.email,'megan@demo.34five.studio');assert.match(send.body.headers['In-Reply-To'],/new@example.invalid/);assert.equal(send.body.headers['Message-ID'],undefined);assert.equal(send.body.reply_to,'megan@demo.34five.studio');assert.equal(send.body.replyTo,undefined);assert.equal(sent.rfc_message_id,null);
+ const send=calls.find(c=>c.url.endsWith('/email/sending/send'));assert.equal(send.body.from.address,'megan@demo.34five.studio');assert.equal(send.body.from.email,undefined);assert.match(send.body.headers['In-Reply-To'],/new@example.invalid/);assert.equal(send.body.headers['Message-ID'],undefined);assert.equal(send.body.reply_to,'megan@demo.34five.studio');assert.equal(send.body.replyTo,undefined);assert.equal(sent.rfc_message_id,null);
 });
 
 test('generation requires management authorization and same-origin JSON, and cannot cross tenants',async t=>{
@@ -158,4 +158,14 @@ test('internal persona rejection is caught as 409 and leaves the coordinator usa
  x.sql.exec("INSERT INTO auras(id,org_id,name) VALUES ('aura_demo_003','org_demo_001','Renamed'); INSERT INTO email_domains(id,org_id,domain,domain_key,kind,status,verified_at,activated_at) VALUES ('persona_domain','org_demo_001','persona.example.com','persona.example.com','custom','active','2026-11-01T00:00:00.000Z','2026-11-01T00:00:00.000Z'); INSERT INTO email_addresses(id,org_id,domain_id,local_part,address,address_key) VALUES ('persona_address','org_demo_001','persona_domain','neutral','neutral@persona.example.com','neutral@persona.example.com'); INSERT INTO email_address_assignments(id,org_id,address_id,aura_id,assigned_at) VALUES ('persona_assignment','org_demo_001','persona_address','aura_demo_003','2026-11-01T00:00:00.000Z'); INSERT INTO email_address_provisioning(org_id,address_id,status,worker_name,updated_at) VALUES ('org_demo_001','persona_address','provisioning_pending','old-worker','2026-11-01T00:00:00.000Z');");
  const request=id=>worker.fetch(new Request('https://inbox.example/internal/provision-address',{method:'POST',headers:{Authorization:'Bearer bridge-secret','Content-Type':'application/json'},body:JSON.stringify({aura_id:id})}),x.env);
  const response=await request('aura_demo_003');assert.equal(response.status,409);assert.match((await response.json()).error,/client-provided configuration/);assert.equal((await request('unknown')).status,404);
+});
+
+test('definite send rejection is failed with safe diagnostics, while an uncertain send stays claimed and visible',async t=>{
+ const x=world(t),id=await megan(x,'4');transport(t);await generate(x,id);t.mock.restoreAll();
+ t.mock.method(globalThis,'fetch',async(url)=>String(url).includes('generativelanguage')?Response.json({candidates:[{finishReason:'STOP',content:{parts:[{text:'Hello.'}]}}]}):Response.json({success:false,errors:[{code:10102,message:'private-test-token'}]},{status:403}));
+ const m=email('megan@demo.34five.studio');m.headers.set('Authentication-Results','mx.cloudflare.net; dmarc=pass');await worker.email(m,x.env);
+ const out=x.sql.prepare("SELECT * FROM email_messages WHERE aura_id=? AND direction='out'").get(id);assert.equal(out.status,'failed');
+ const r=await x.request(`/api/auras/${id}/threads/${out.thread_id}/messages`);const page=await r.json(),message=page.messages.find(m=>m.id===out.id);assert.equal(message.display_state,'send_failed');assert.match(message.send_failure.summary,/credentials or permissions/);assert.doesNotMatch(JSON.stringify(page),/private-test-token/);
+ x.sql.prepare("UPDATE email_messages SET status='sending' WHERE id=?").run(out.id);x.sql.prepare("UPDATE email_events SET event_type='unknown' WHERE message_id=? AND json_extract(raw_payload_json,'$.stage')='dispatch'").run(out.id);
+ const unknown=await (await x.request(`/api/auras/${id}/threads/${out.thread_id}/messages`)).json();assert.equal(unknown.messages.find(m=>m.id===out.id).display_state,'send_unknown');
 });

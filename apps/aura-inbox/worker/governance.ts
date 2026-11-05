@@ -1,4 +1,4 @@
-import { generatedSenderReady, sendGenerated } from './generated-sender.ts';
+import { generatedSenderReady, sendGenerated, sendErrorDetail, sendFailureSummary } from './generated-sender.ts';
 import { HttpError, type Env } from './types.ts';
 
 type Row = Record<string, any>;
@@ -244,7 +244,7 @@ export class Governance {
     // Object reads may be slow. Recheck the exact decision and route at the provider boundary.
     await this.fresh(r,await this.message(aura,m.id)); await this.route(m);
     if (r.decision_source === 'human') await this.reviewer(aura,r.approver_member_id);
-    const claim = await this.q("UPDATE email_messages SET status='sending' WHERE org_id=? AND aura_id=? AND id=? AND status IN ('draft','queued')",this.org,aura,m.id).run();
+    const claim = await this.q("UPDATE email_messages SET status='sending',activity_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE org_id=? AND aura_id=? AND id=? AND status IN ('draft','queued')",this.org,aura,m.id).run();
     if (!claim.meta.changes) throw new HttpError(409,'This message already has a send claim.');
     let result: {messageId:string|null};
     try {
@@ -254,10 +254,15 @@ export class Governance {
         : generated
         ? await sendGenerated(this.env,builder,{to:byKind('to'),...(byKind('cc').length ? {cc:byKind('cc')} : {}),...(byKind('bcc').length ? {bcc:byKind('bcc')} : {})})
         : await this.env.EMAIL!.send({...builder,to:byKind('to'),...(byKind('cc').length ? {cc:byKind('cc')} : {}),...(byKind('bcc').length ? {bcc:byKind('bcc')} : {})});
-    } catch {
-      await this.q(`INSERT INTO email_events (id,org_id,aura_id,message_id,event_type,dedup_key,occurred_at,raw_payload_json)
-        VALUES (?,?,?,?,'unknown',?,?,?) ON CONFLICT DO NOTHING`,crypto.randomUUID(),this.org,aura,m.id,`${m.id}:unknown`,new Date().toISOString(),JSON.stringify({send_status:'unknown',retry_safe:false})).run();
-      return {status:'unknown',message:'Provider outcome is unknown. Do not retry this message.'};
+    } catch(error) {
+      const detail=sendErrorDetail(error),failed=detail.outcome==='rejected',now=new Date().toISOString();
+      const payload={stage:'dispatch',send_status:failed?'rejected':'unknown',retry_safe:false,...detail};
+      const statements=[this.q(`INSERT INTO email_events (id,org_id,aura_id,message_id,event_type,dedup_key,occurred_at,raw_payload_json)
+        VALUES (?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`,crypto.randomUUID(),this.org,aura,m.id,failed?'failed':'unknown',`${m.id}:send-outcome`,now,JSON.stringify(payload))];
+      if(failed)statements.push(this.q("UPDATE email_messages SET status='failed' WHERE org_id=? AND aura_id=? AND id=? AND status='sending'",this.org,aura,m.id),this.q("UPDATE email_message_recipients SET delivery_status='failed',delivery_status_at=? WHERE org_id=? AND aura_id=? AND message_id=?",now,this.org,aura,m.id));
+      await this.env.DB.batch(statements);
+      console.error(JSON.stringify({event:'governance_send_failed',aura_id:aura,message_id:m.id,...detail}));
+      return failed?{status:'failed',message:sendFailureSummary(detail.http_status,detail.codes)}:{status:'unknown',message:'Provider outcome is unknown. Do not retry this message.'};
     }
     const now = new Date().toISOString();
     try {

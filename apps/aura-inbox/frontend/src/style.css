@@ -625,3 +625,6 @@ select:not([multiple]):not([size]):disabled { color: var(--ink-muted); cursor: n
 .sidebar-signout { display:block; color:var(--rail-ink); background:transparent; border:1px solid var(--rail-rule); border-radius:var(--radius-pill); margin-top:12px; padding:7px 16px; font:inherit; }
 .session-error { position:fixed; z-index:10; top:12px; left:50%; transform:translateX(-50%); }
 @media(max-width:700px) { .login-page { grid-template-columns:1fr; } .login-story { padding:24px; gap:24px; } .login-story h1 { font-size:28px; } .login-story>div,.login-story .login-demo-label { display:none; } .login-form-area { align-items:flex-start; padding:40px 24px; } }
+
+.reply-unconfirmed { margin-top: var(--space-3); padding: var(--space-3) var(--space-4); border-radius: var(--radius-tile); background: var(--badge-clay-bg); color: var(--badge-clay-ink); font-size: var(--text-sm); line-height: 1.6; }
+.reply-unconfirmed strong { font-weight: 600; }

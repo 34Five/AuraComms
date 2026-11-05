@@ -13,7 +13,7 @@ type Message = { id: string; direction: string; status: string; from_address: st
   subject: string | null; body_text: string | null; body_html: string | null; body_storage: string; activity_at: string;
   recipients: { kind: string; address: string; display_name: string | null }[];
   attachments: { id: string; filename: string; size_bytes: number }[];
-  failure: { class: string; summary: string } | null; display_state: string | null };
+  failure: { class: string; summary: string } | null; send_failure?:{summary:string}|null; display_state: string | null };
 type ThreadPage = { threads: Thread[]; nextCursor: string | null };
 type MessagePage = { thread: Thread; messages: Message[]; nextCursor: string | null };
 
@@ -83,12 +83,14 @@ function MessageCard({ message: m, auraId }: { message: Message; auraId: string 
       {m.recipients.some(r => r.kind === 'cc') && <span className="recipient-cc">Cc: {m.recipients.filter(r => r.kind === 'cc').map(r => r.address).join(', ')}</span>}</div>
     {state === 'failed' && <div className="reply-failed" role="alert"><strong>Reply failed</strong>{m.failure && <p>{m.failure.summary}</p>}<p>No email was sent.</p></div>}
     {state === 'timed_out' && <div className="reply-failed" role="alert"><strong>Reply timed out</strong><p>The reply did not finish generating, and no email was sent.</p></div>}
+    {state==='send_unknown'&&<div className="reply-unconfirmed" role="status"><strong>Send outcome unconfirmed</strong><p>The send attempt ended without confirmation. Do not resend until an administrator checks the provider’s activity.</p></div>}
+    {state==='send_failed'&&<div className="reply-failed" role="alert"><strong>Email not sent</strong><p>{m.send_failure?.summary||'The email provider rejected the send request.'}</p></div>}
     {state === 'generating' && <p className="reply-generating">Generating reply…</p>}
-    {(state === 'normal' || (state === 'failed' && hasBody)) && (m.body_storage === 'r2' && !body ? <button className="text-button" onClick={load} disabled={loading}>{loading ? 'Loading message…' : 'Load full message'}</button>
+    {(state === 'normal' || state==='send_unknown' || state==='send_failed' || (state === 'failed' && hasBody)) && (m.body_storage === 'r2' && !body ? <button className="text-button" onClick={load} disabled={loading}>{loading ? 'Loading message…' : 'Load full message'}</button>
       : <MessageBody text={plain(body?.body_text ?? m.body_text,body?.body_html ?? m.body_html)}/>)}
     {error && <p className="inline-error" role="alert">{error}</p>}
     {m.attachments.length > 0 && <div className="attachments">{m.attachments.map(a => <a key={a.id} href={`/api/auras/${auraId}/messages/${m.id}/attachments/${a.id}`} className="attachment"><Icon name="attachment" size={16}/><span>{a.filename || 'Attachment'}<small>{Math.max(1,Math.round(a.size_bytes/1024))} KB</small></span></a>)}</div>}
-    {state === 'normal' && <div className="message-status"><Icon name="check" size={13}/>{m.direction === 'in' ? 'Received' : m.status}</div>}
+    {state === 'normal' && <div className="message-status">{(m.direction==='in'||m.status==='sent')&&<Icon name="check" size={13}/>} {m.direction === 'in' ? 'Received' : m.status}</div>}
   </article>;
 }
 
