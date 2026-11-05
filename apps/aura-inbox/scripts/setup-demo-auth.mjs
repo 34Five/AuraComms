@@ -22,9 +22,9 @@ try {
   if(tables.length===0){
     execute(readFileSync(new URL('../../../tests/email/fixtures/studio_parents_2026_10_22.sql',import.meta.url),'utf8'));
   } else if(tables.length!==2) throw new Error('The local demo has incomplete parent tables. Inspect it before setup.');
-  for(const file of ['0001_email_model.sql','0002_email_governance.sql','0003_email_workspace_access.sql','0004_email_workspace_login.sql']){
+  for(const file of ['0001_email_model.sql','0002_email_governance.sql','0003_email_workspace_access.sql','0004_email_workspace_login.sql','0005_email_address_provisioning.sql']){
     // Existing schema migrations are not repeatable. Check their primary table first.
-    const table={'0001_email_model.sql':'email_domains','0002_email_governance.sql':'email_reviews','0003_email_workspace_access.sql':'email_workspace_access','0004_email_workspace_login.sql':'email_workspace_logins'}[file];
+    const table={'0001_email_model.sql':'email_domains','0002_email_governance.sql':'email_reviews','0003_email_workspace_access.sql':'email_workspace_access','0004_email_workspace_login.sql':'email_workspace_logins','0005_email_address_provisioning.sql':'email_address_provisioning'}[file];
     const applied=file==='0002_email_governance.sql'?query("SELECT name FROM pragma_table_info('email_reviews') WHERE name='decision_source'").length:query(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=${sqlValue(table)}`).length;
     if(!applied) execute(readFileSync(new URL('../../../scripts/'+file,import.meta.url),'utf8'));
   }

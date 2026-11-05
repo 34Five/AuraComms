@@ -1,3 +1,6 @@
+import { retryProvisioning } from './address.ts';
+import { managementBody } from './auth-utils.ts';
+import { requireId } from './utils.ts';
 import { api } from './api.ts';
 import { receive } from './inbound.ts';
 import { HttpError, type Env } from './types.ts';
@@ -10,6 +13,10 @@ export class GovernanceCoordinator {
   async fetch(request: Request): Promise<Response> {
     return this.ctx.blockConcurrencyWhile(async () => {
       try {
+        if (new URL(request.url).pathname === '/internal/provision-address') {
+          const data=await managementBody(request);
+          return await retryProvisioning(this.env,requireId(data.aura_id));
+        }
         if (new URL(request.url).pathname === '/internal/ingest') {
           const raw = new Uint8Array(await request.arrayBuffer());
           let rejection: string | null = null;

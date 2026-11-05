@@ -1,5 +1,9 @@
 export interface Env {
   DB: D1Database;
+  CF_API_TOKEN?: string;
+  CF_ZONE_ID?: string;
+  DEMO_WORKER_NAME?: string;
+  ADDRESS_PROVISIONING_SECRET?: string;
   DEMO_LOGIN_ENABLED?: string;
   CLOUDFLARE_DOMAIN_API_TOKEN?: string;
   CLOUDFLARE_ACCOUNT_ID?: string;

@@ -1,3 +1,4 @@
+import { generatedSenderReady, sendGenerated } from './generated-sender.ts';
 import { HttpError, type Env } from './types.ts';
 
 type Row = Record<string, any>;
@@ -195,7 +196,7 @@ export class Governance {
       JOIN email_domains d ON d.org_id=a.org_id AND d.id=a.domain_id WHERE x.org_id=? AND x.aura_id=? AND x.id=? AND x.address_id=?
       AND x.ended_at IS NULL AND x.assigned_at<=? AND a.address_key=? AND a.status='active' AND d.status='active'`,
       this.org,m.aura_id,m.address_assignment_id,m.email_address_id,new Date().toISOString(),m.from_address.toLowerCase()).first();
-    if (!r || !TEST_ADDRESSES.includes(m.from_address.toLowerCase())) throw new HttpError(409,'The test sending address is no longer active.');
+    if (!r) throw new HttpError(409,'The test sending address is no longer active.');
   }
   async dispatch(aura: string, id: string, nativeReply?: (builder: EmailReplyMessageBuilder) => Promise<EmailSendResult>) {
     const r = await this.review(aura,id), m = await this.message(aura,r.message_id);
@@ -237,17 +238,21 @@ export class Governance {
         ...(m.in_reply_to ? {'In-Reply-To':`<${m.in_reply_to}>`} : {}),...(refs.length ? {References:refs.map(v => `<${v}>`).join(' ')} : {})},
       ...(attachments.length ? {attachments} : {}),
     };
-    if ((!nativeReply || byKind('cc').length || byKind('bcc').length) && !this.env.EMAIL) throw new HttpError(503,'The email sender is not configured.');
+    const generated = !TEST_ADDRESSES.includes(m.from_address.toLowerCase());
+    if (generated && (!nativeReply || byKind('cc').length || byKind('bcc').length) && !generatedSenderReady(this.env)) throw new HttpError(503,'Email Sending credentials are not configured for generated addresses.');
+    if (!generated && (!nativeReply || byKind('cc').length || byKind('bcc').length) && !this.env.EMAIL) throw new HttpError(503,'The email sender is not configured.');
     // Object reads may be slow. Recheck the exact decision and route at the provider boundary.
     await this.fresh(r,await this.message(aura,m.id)); await this.route(m);
     if (r.decision_source === 'human') await this.reviewer(aura,r.approver_member_id);
     const claim = await this.q("UPDATE email_messages SET status='sending' WHERE org_id=? AND aura_id=? AND id=? AND status IN ('draft','queued')",this.org,aura,m.id).run();
     if (!claim.meta.changes) throw new HttpError(409,'This message already has a send claim.');
-    let result: EmailSendResult;
+    let result: {messageId:string|null};
     try {
       // Native replies cannot carry CC/BCC. Use the sending binding whenever copies exist.
       result = nativeReply && !byKind('cc').length && !byKind('bcc').length
         ? await nativeReply(builder)
+        : generated
+        ? await sendGenerated(this.env,builder,{to:byKind('to'),...(byKind('cc').length ? {cc:byKind('cc')} : {}),...(byKind('bcc').length ? {bcc:byKind('bcc')} : {})})
         : await this.env.EMAIL!.send({...builder,to:byKind('to'),...(byKind('cc').length ? {cc:byKind('cc')} : {}),...(byKind('bcc').length ? {bcc:byKind('bcc')} : {})});
     } catch {
       await this.q(`INSERT INTO email_events (id,org_id,aura_id,message_id,event_type,dedup_key,occurred_at,raw_payload_json)
@@ -257,7 +262,7 @@ export class Governance {
     const now = new Date().toISOString();
     try {
       await this.env.DB.batch([
-        this.q("UPDATE email_messages SET status='sent',sent_at=?,activity_at=?,provider_message_id=?,rfc_message_id=? WHERE org_id=? AND aura_id=? AND id=?",now,now,result.messageId,result.messageId.replace(/^<|>$/g,''),this.org,aura,m.id),
+        this.q("UPDATE email_messages SET status='sent',sent_at=?,activity_at=?,provider_message_id=?,rfc_message_id=? WHERE org_id=? AND aura_id=? AND id=?",now,now,result.messageId,result.messageId?.replace(/^<|>$/g,'') ?? null,this.org,aura,m.id),
         this.q("UPDATE email_reviews SET status='sent',sent_at=? WHERE org_id=? AND aura_id=? AND id=?",now,this.org,aura,id),
         this.q("UPDATE email_message_recipients SET delivery_status='accepted',delivery_status_at=? WHERE org_id=? AND aura_id=? AND message_id=?",now,this.org,aura,m.id),
         this.q("UPDATE email_threads SET tier_state='sent',last_activity_at=MAX(last_activity_at,?),state_version=state_version+1 WHERE org_id=? AND aura_id=? AND id=?",now,this.org,aura,m.thread_id),

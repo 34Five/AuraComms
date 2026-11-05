@@ -358,3 +358,17 @@ Retain the additive access, login, session, and audit tables during an applicati
 - `GET /api/manage/users` returns the Admin directory and latest access audit events. User mutations are disabled in demo login mode.
 
 Authentication tests cover all three accounts, invalid passwords, normalized usernames, spoofed role and tenant fields, bearer bypass attempts, session refresh, logout, rotation, expiry, forged and duplicate cookies, cross-tenant access, suspension, fixed-role tampering, same-origin checks, throttling, migration constraints, and reseeding. Browser checks cover incorrect login, all three valid logins, refresh persistence, sign-out, the read-only Admin directory, Manager controls, and Reviewer page restrictions.
+
+## Generated address provisioning (PR #15)
+
+The replica provides `POST /api/manage/auras` with `generate_email:true`, `local_part`, and `domain_id`, plus the address/proposal/retry controls for an existing Aura. Prefix rules and reserved names come from `shared/email-prefix.ts`, the same module used by the inbox branch. Names are lowercase letters/digits with single dots or hyphens between groups. Reserved service and live mailbox names are unavailable even without a D1 row. Existing assignments cannot be changed by resubmitting generation.
+
+Apply the canonical `scripts/0005_email_address_provisioning.sql` before deploying. This is the same additive table migration as the inbox branch; `0003_email_address_provisioning.sql` is retired there. Existing installations can run `0005` idempotently; do not apply the parent schema/seed against shared D1.
+
+The Studio Worker owns `CLOUDFLARE_DOMAIN_API_TOKEN` (or the legacy `CF_API_TOKEN`) and the routing zone. The inbox must not receive that provider token. Both Workers need the same dedicated `ADDRESS_PROVISIONING_SECRET` secret. Set it separately on `aura-inbox-test` and `aura-inbox-demo`; do not commit its value. The inbox's `env.demo.services` binding `ADDRESS_PROVISIONER` targets `aura-inbox-test`. The server endpoint `/internal/provision-address` is supplied by this branch/PR #15, and is protected by that secret before entering the organization coordinator. Deploy the server before enabling the client from PR #16; merging the client into `spikes/cf-email` alone does not add its server.
+
+Routing calls share a 12-second total deadline (5 seconds per request), below the coordinator's 30-second reset. The client has a 15-second timeout and requires the shared D1 provisioning row to become active. Only exact AuraComms-owned routing rules may be adopted; unrelated manual rules and catch-all are preserved.
+
+The default remains `AUTO_REPLY_MODE=fixed` for existing predefined routes. Generated assignments with a provisioning row use LLM replies and the selected governance tier even in fixed mode. This PR does not enable LLM calls for every existing address. An explicit deployment-wide `llm` setting still applies to all eligible routes.
+
+The hand-written persona code, shared-password login, competing authentication migrations/cookies, and identity-rename migration come from the base branch and are **unresolved merge blockers** for integration into `spikes/cf-email`. Keep the two existing Workers/configurations separate until governance and roles are integrated with the invite-only sign-in. Do not run `migrate-persona-emails.mjs` against shared D1 as part of this fix.

@@ -1,3 +1,4 @@
+import { readAddress, proposeAddress, generateAddress, retryProvisioning, prepareAddress } from './address.ts';
 import { Governance } from './governance.ts';
 import { authorizeManagement, managementBody, requireRole } from './management-auth.ts';
 import { userManagement, workspaceUsers } from './user-management.ts';
@@ -20,17 +21,48 @@ export async function managementApi(request: Request, env: Env): Promise<Respons
   if (parts.length===3 && resource==='auras' && request.method==='POST') {
     const data=await managementBody(request), name=validName(data.name), role=validName(data.role ?? 'General assistant','Aura role'), tier=data.tier ?? '1';
     if (!['1','2','3','4'].includes(tier)) throw new HttpError(400,'Choose a tier from 1 to 4.');
+    if(data.generate_email!==undefined && typeof data.generate_email!=='boolean') throw new HttpError(400,'Choose whether to create an email address.');
+    if(data.generate_email) await prepareAddress(env,name,data);
     const aura=`aura_${crypto.randomUUID()}`;
     await env.DB.batch([
       g.q('INSERT INTO auras (id,org_id,name,role) VALUES (?,?,?,?)',aura,g.org,name,role),
       g.q('INSERT INTO email_aura_policies (org_id,aura_id,tier,updated_by_member_id) VALUES (?,?,?,?)',g.org,aura,tier,member),
       g.q('INSERT INTO email_aura_reviewers (org_id,aura_id,member_id,configured_by_member_id) VALUES (?,?,?,?)',g.org,aura,member,member),
     ]);
-    return json({aura:{id:aura,name,role},message:'Aura created. Configure an email address before sending.'},201);
+    if(data.generate_email) {
+      const cleanup=async()=>{
+        // Only remove this newly-created Aura when no assignment was committed.
+        if(await g.q('SELECT 1 FROM email_address_assignments WHERE org_id=? AND aura_id=?',g.org,aura).first())return;
+        await env.DB.batch([
+          g.q('DELETE FROM email_aura_reviewers WHERE org_id=? AND aura_id=?',g.org,aura),
+          g.q('DELETE FROM email_aura_policies WHERE org_id=? AND aura_id=?',g.org,aura),
+          g.q('DELETE FROM auras WHERE org_id=? AND id=?',g.org,aura),
+        ]);
+      };
+      try {
+        const result=await generateAddress(new Request(request.url,{method:'POST',body:JSON.stringify({domain_id:data.domain_id,local_part:data.local_part})}),env,{id:aura,name});
+        const body=await result.json() as {address?:{provisioning:{status:string}};error?:string};
+        if(!result.ok) {await cleanup();return json(body,result.status);}
+        if(!body.address) {await cleanup();throw new HttpError(502,'Email setup returned no address.');}
+        return json({aura:{id:aura,name,role},...body,message:body.address.provisioning.status==='active'?'Aura and email created. Incoming mail is ready; replies follow its governance tier.':'Aura created. Email setup needs attention; retry from Aura configuration.'},201);
+      } catch(error) {await cleanup();throw error;}
+
+    }
+    return json({aura:{id:aura,name,role},message:'Aura created. Generate an email address in its configuration.'},201);
   }
   if (resource==='auras' && id) {
     const row=await g.one('SELECT * FROM auras WHERE org_id=? AND id=?',g.org,id);
     const aura={id:row.id,name:row.name,role:auraConfig(row).role};
+    if (parts[4]==='address') {
+      if(parts.length===5 && request.method==='GET') return readAddress(env,id);
+      if(parts.length===6 && parts[5]==='proposal' && request.method==='GET') return proposeAddress(env,aura);
+      if(request.method==='POST') {
+        const body=await managementBody(request);
+        if(parts.length===5) return generateAddress(new Request(request.url,{method:'POST',body:JSON.stringify(body)}),env,aura);
+        if(parts.length===6 && parts[5]==='provision') return retryProvisioning(env,id);
+      }
+      throw new HttpError(405,'Method not allowed.');
+    }
     if (parts.length===4 && request.method==='GET') {
       const addresses=await g.q(`SELECT a.id,a.address,a.status,d.domain,d.status AS domain_status,x.id AS assignment_id FROM email_addresses a
         JOIN email_address_assignments x ON x.org_id=a.org_id AND x.address_id=a.id JOIN email_domains d ON d.org_id=a.org_id AND d.id=a.domain_id
