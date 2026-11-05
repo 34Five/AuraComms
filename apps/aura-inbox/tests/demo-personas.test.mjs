@@ -21,14 +21,14 @@ test('each demo identity has a distinct personality independent of name and tier
 
 test('temporary personalities do not apply to another organization, an unknown Aura, or name matches', () => {
   for (const row of [
-    { id: 'aura_demo_001', org_id: 'other_org', name: 'Lyra' },
+    { id: 'aura_demo_001', org_id: 'other_org', name: 'Orbi' },
     { id: 'custom_aura', org_id: DEMO_ORG, name: 'Merlin' },
-    { id: 'aura_demo_001', name: 'Lyra' },
+    { id: 'aura_demo_001', name: 'Orbi' },
   ]) assert.equal(auraConfig(row).personality, null);
 });
 
 test('imported persona fields replace the temporary personality without blending voices', () => {
-  const row = { id: 'aura_demo_001', org_id: DEMO_ORG, name: 'Lyra' };
+  const row = { id: 'aura_demo_001', org_id: DEMO_ORG, name: 'Orbi' };
   for (const field of ['role', 'facet', 'personality', 'system_instructions']) {
     const config = auraConfig({ ...row, [field]: '345 team instructions, unchanged.' });
     assert.equal(config[field], '345 team instructions, unchanged.');
@@ -59,11 +59,18 @@ test('renaming is idempotent and preserves all four policies, routes, history, a
   assert.deepEqual(tables.map(table => query(`SELECT * FROM ${table}`)), before);
 });
 
+test('renaming also upgrades the original job labels', t => {
+  const x = setup(t), query = demoRows(x);
+  for (const p of DEMO_PERSONAS.slice(0, 4)) x.sql.prepare('UPDATE auras SET name=? WHERE id=?').run(p.legacyNames[0], p.id);
+  renameDemoAuras(query);
+  for (const p of DEMO_PERSONAS) assert.equal(x.sql.prepare('SELECT name FROM auras WHERE id=?').get(p.id).name, p.name);
+});
+
 test('renaming preserves custom names and refuses incomplete or foreign-owned demo identities', t => {
   const x = setup(t), query = demoRows(x);
-  x.sql.exec("UPDATE auras SET name='My Lyra' WHERE id='aura_demo_001'");
+  x.sql.exec("UPDATE auras SET name='My Orbi' WHERE id='aura_demo_001'");
   renameDemoAuras(query);
-  assert.equal(x.sql.prepare("SELECT name FROM auras WHERE id='aura_demo_001'").get().name, 'My Lyra');
+  assert.equal(x.sql.prepare("SELECT name FROM auras WHERE id='aura_demo_001'").get().name, 'My Orbi');
   for (const rows of [query('SELECT * FROM auras').filter(row => row.id === 'aura_demo_001'),
     DEMO_PERSONAS.slice(0, 4).map(persona => ({ id: persona.id, org_id: 'other_org', name: persona.previousName }))]) {
     let writes = 0;

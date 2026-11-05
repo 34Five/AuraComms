@@ -6,7 +6,7 @@ const cli=fileURLToPath(new URL('../node_modules/wrangler/bin/wrangler.js',impor
 const target=process.argv.includes('--remote')?'--remote':'--local';
 const env={...process.env,WRANGLER_SEND_METRICS:'false'};
 const query=sql=>JSON.parse(execFileSync(process.execPath,[cli,'d1','execute','DB',target,'--command',sql,'--json'],{cwd,encoding:'utf8',env}))[0].results;
-const expected=new Map(DEMO_PERSONAS.filter(p=>p.id!=='aura_demo_merlin').map(p=>[p.id,[p.name,p.previousName]]));
+const expected=new Map(DEMO_PERSONAS.filter(p=>p.id!=='aura_demo_merlin').map(p=>[p.id,[p.name,p.previousName,...p.legacyNames]]));
 const auras=query("SELECT id,org_id,name FROM auras WHERE id IN ('aura_demo_001','aura_demo_002','aura_demo_003','aura_demo_004')");
 if(!['aura_demo_001','aura_demo_002'].every(id=>auras.some(a=>a.id===id)))throw new Error('The two existing Auras are required.');
 if(auras.some(a=>a.org_id!=='org_demo_001'||!expected.get(a.id)?.includes(a.name)))throw new Error('Aura ownership or name conflict.');
@@ -15,8 +15,8 @@ const columns=query("SELECT name FROM pragma_table_info('email_reviews')").map(r
 if(!['decision_source','policy_snapshot_json'].every(n=>columns.includes(n)))throw new Error('Apply the governance migration before provisioning.');
 const domains=query("SELECT org_id,status FROM email_domains WHERE domain_key='34five.studio'");
 if(domains.length!==1||domains[0].org_id!=='org_demo_001'||domains[0].status!=='active')throw new Error('The active test domain is required.');
-const addresses=new Map([['atlas@34five.studio','aura_demo_003'],['iris@34five.studio','aura_demo_004']]);
-const assigned=query("SELECT a.org_id,a.address_key,a.status,x.aura_id FROM email_addresses a LEFT JOIN email_address_assignments x ON x.org_id=a.org_id AND x.address_id=a.id AND x.ended_at IS NULL WHERE a.address_key IN ('atlas@34five.studio','iris@34five.studio')");
+const addresses=new Map([['olivia@34five.studio','aura_demo_003'],['sophia@34five.studio','aura_demo_004']]);
+const assigned=query("SELECT a.org_id,a.address_key,a.status,x.aura_id FROM email_addresses a LEFT JOIN email_address_assignments x ON x.org_id=a.org_id AND x.address_id=a.id AND x.ended_at IS NULL WHERE a.address_key IN ('olivia@34five.studio','sophia@34five.studio')");
 if(assigned.some(a=>a.org_id!=='org_demo_001'||a.status!=='active'||a.aura_id&&a.aura_id!==addresses.get(a.address_key)))throw new Error('Address ownership or state conflict.');
 const policies=query("SELECT aura_id,tier,version FROM email_aura_policies WHERE org_id='org_demo_001'");
 if(policies.some(p=>expected.has(p.aura_id)&&p.tier===null&&p.version>1))throw new Error('An existing policy was removed. Restore it explicitly instead of reprovisioning it.');
@@ -24,6 +24,6 @@ if(policies.some(p=>expected.has(p.aura_id)&&p.tier!==null&&p.tier!==String([...
 execFileSync(process.execPath,[cli,'d1','execute','DB',target,'--file','scripts/provision-governance.sql','--json'],{cwd,stdio:'inherit',env});
 const actual=query("SELECT a.id,a.name,p.tier FROM auras a JOIN email_aura_policies p ON p.org_id=a.org_id AND p.aura_id=a.id WHERE a.org_id='org_demo_001' AND a.id IN ('aura_demo_001','aura_demo_002','aura_demo_003','aura_demo_004') ORDER BY p.tier");
 if(actual.length!==4||actual.some(a=>a.tier!==String([...expected.keys()].indexOf(a.id)+1)))throw new Error('Four-tier policy verification failed.');
-const routes=query("SELECT a.address_key,x.aura_id FROM email_addresses a JOIN email_address_assignments x ON x.org_id=a.org_id AND x.address_id=a.id AND x.ended_at IS NULL WHERE a.address_key IN ('atlas@34five.studio','iris@34five.studio')");
+const routes=query("SELECT a.address_key,x.aura_id FROM email_addresses a JOIN email_address_assignments x ON x.org_id=a.org_id AND x.address_id=a.id AND x.ended_at IS NULL WHERE a.address_key IN ('olivia@34five.studio','sophia@34five.studio')");
 if(routes.length!==2||routes.some(r=>r.aura_id!==addresses.get(r.address_key)))throw new Error('New address assignment verification failed.');
 console.log(JSON.stringify({auras:actual,new_addresses:routes},null,2));

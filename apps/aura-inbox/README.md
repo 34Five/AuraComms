@@ -39,10 +39,10 @@ Email HTML becomes text. Scripts, remote images, and interactive email content d
 
 Cloudflare Email Routing sends the four test aliases to `aura-inbox-test`:
 
-- `lyra@34five.studio` → existing `aura_demo_001` (Lyra, customer support specialist, Tier 1).
-- `nova@34five.studio` → existing `aura_demo_002` (Nova, sales advisor, Tier 2).
-- `atlas@34five.studio` → `aura_demo_003` (Atlas, operations coordinator, Tier 3).
-- `iris@34five.studio` → `aura_demo_004` (Iris, communications coordinator, Tier 4).
+- `orbi@34five.studio` → existing `aura_demo_001` (Orbi, customer support specialist, Tier 1).
+- `daniel@34five.studio` → existing `aura_demo_002` (Daniel, sales advisor, Tier 2).
+- `olivia@34five.studio` → `aura_demo_003` (Olivia, operations coordinator, Tier 3).
+- `sophia@34five.studio` → `aura_demo_004` (Sophia, communications coordinator, Tier 4).
 
 Merlin remains the general assistant at `merlin@34five.studio`, served by its existing `aura-inbox-demo` Worker. Its route stays separate.
 
@@ -85,10 +85,10 @@ The prompt uses the Aura's name, any role, facet, personality, system instructio
 
 The 345 team's existing persona instructions are the intended source (AXI-24). Until they arrive, `worker/llm/demo-personas.ts` supplies temporary hardcoded personalities:
 
-- Lyra (Tier 1): patient, empathetic, and reassuring.
-- Nova (Tier 2): curious, upbeat, and thoughtful.
-- Atlas (Tier 3): calm, methodical, and dependable.
-- Iris (Tier 4): bright, observant, and concise.
+- Orbi (Tier 1): patient, empathetic, and reassuring.
+- Daniel (Tier 2): curious, upbeat, and thoughtful.
+- Olivia (Tier 3): calm, methodical, and dependable.
+- Sophia (Tier 4): bright, observant, and concise.
 - Merlin: warm, friendly, and approachable.
 
 Each demo Aura has a role, a personal name, a personality, and a separate sending tier. Roles and voices apply only to known Aura IDs in `org_demo_001`, including after a name change. Other Auras receive no default personality. Stored roles take precedence over demo roles. A stored `facet`, `personality`, `system_instructions`, or a role different from the demo role replaces the temporary voice. The seeded demo role keeps its matching personality. The prompt passes stored instructions through without rewriting them. Blocklists and email rules still apply. The prompt boundary supports the team's configuration but does not connect to their source yet.
@@ -105,7 +105,7 @@ Omit `--remote` for local D1. Use `--persist-to .wrangler/login-demo` for the au
 
 Address identities are immutable. The migration reserves new addresses, assigns them to the existing Auras, closes old assignments, and disables old addresses. Historical message addresses and references stay unchanged. It preserves custom names, custom roles, all policy versions, and Merlin's existing address. Reruns are idempotent. Ownership conflicts, unsent messages from old aliases, or concurrent edits abort the change. Wrangler executes the SQL file as one transaction.
 
-Coordinate the database migration with the Worker sender allowlist and four Cloudflare routing rules. The database command does not deploy code or update routes. Keep the other Workers and catch-all unchanged. `scripts/provision-personas.mjs` remains available for name-only updates.
+Coordinate the database migration with the Worker sender allowlist and four Cloudflare routing rules. Use `--stage` to create the new addresses while retaining previous aliases. Deploy and switch the four routes, then rerun without `--stage` to retire previous aliases. The database command does not deploy code or update routes. Keep the other Workers and catch-all unchanged. `scripts/provision-personas.mjs` remains available for name-only updates.
 
 Replies are capped at 1024 output tokens and 2000 characters at a sentence boundary. A reply cut off by the token limit is still sent, trimmed to its last complete sentence.
 

@@ -16,7 +16,7 @@ function migrationDb(t, legacy = true) {
   for (const file of ['provision-addresses', 'provision-governance']) {
     let sql = readFileSync(new URL(`../scripts/${file}.sql`, import.meta.url), 'utf8');
     if (legacy) for (const p of profiles) {
-      const local = p.name.toLowerCase(), oldLocal = p.previousEmail.split('@')[0];
+      const local = p.email.split('@')[0], oldLocal = p.previousEmail.split('@')[0];
       sql = sql.replaceAll(p.email, p.previousEmail).replaceAll(`'${local}'`, `'${oldLocal}'`)
         .replaceAll(`address_${local}`, `address_legacy_${local}`).replaceAll(`assignment_${local}`, `assignment_legacy_${local}`);
     }
@@ -77,6 +77,18 @@ test('fresh named addresses work with provisioning and the sender allowlist', as
   }
 });
 
+test('staging keeps the previous addresses active until the route switch finishes', t => {
+  const x = migrationDb(t);
+  const original = profiles[0].legacyEmails[0], local = original.split('@')[0];
+  x.sql.prepare(`INSERT INTO email_addresses (id,org_id,domain_id,local_part,address,address_key,status,disabled_at)
+    VALUES ('original_alias',?,'domain_34five_inbox_test',?,?,?,'disabled','2026-11-01T00:00:00.000Z')`).run(DEMO_ORG,local,original,original);
+  migrateDemoAuraEmails(x.db,new Date().toISOString(),{retirePrevious:false});
+  for (const p of profiles) assert.equal(x.sql.prepare('SELECT status FROM email_addresses WHERE address_key=?').get(p.previousEmail).status,'active');
+  assert.equal(x.sql.prepare("SELECT status FROM email_addresses WHERE id='original_alias'").get().status,'disabled');
+  migrateDemoAuraEmails(x.db);
+  for (const p of profiles) assert.equal(x.sql.prepare('SELECT status FROM email_addresses WHERE address_key=?').get(p.previousEmail).status,'disabled');
+});
+
 test('migration adds the optional role column on the live minimal Aura schema', t => {
   const x = migrationDb(t);
   for (const { name } of x.db.query("PRAGMA table_info('auras')")) {
@@ -96,7 +108,7 @@ test('migration preserves custom names and roles and aborts if another session e
     execute(sql);
   };
   assert.throws(() => migrateDemoAuraEmails(x.db));
-  assert.equal(x.sql.prepare("SELECT COUNT(*) AS n FROM email_addresses WHERE address_key='lyra@34five.studio'").get().n, 0);
+  assert.equal(x.sql.prepare("SELECT COUNT(*) AS n FROM email_addresses WHERE address_key='orbi@34five.studio'").get().n, 0);
   x.db.execute = execute;
   migrateDemoAuraEmails(x.db);
   const row = x.sql.prepare("SELECT name,role FROM auras WHERE id='aura_demo_001'").get();
@@ -105,7 +117,7 @@ test('migration preserves custom names and roles and aborts if another session e
 
 test('conflicting target addresses and unsent legacy drafts prevent migration', async t => {
   const x = migrationDb(t);
-  x.sql.exec("INSERT INTO email_addresses (id,org_id,domain_id,local_part,address,address_key,status,disabled_at) VALUES ('collision','org_demo_001','domain_34five_inbox_test','lyra','lyra@34five.studio','lyra@34five.studio','disabled','2026-11-01T00:00:00.000Z')");
+  x.sql.exec("INSERT INTO email_addresses (id,org_id,domain_id,local_part,address,address_key,status,disabled_at) VALUES ('collision','org_demo_001','domain_34five_inbox_test','orbi','orbi@34five.studio','orbi@34five.studio','disabled','2026-11-01T00:00:00.000Z')");
   assert.throws(() => migrateDemoAuraEmails(x.db), /conflicting ownership or state/);
   x.sql.exec("DELETE FROM email_addresses WHERE id='collision'");
   await receive(email(profiles[0].previousEmail), x.env);

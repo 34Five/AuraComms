@@ -53,7 +53,7 @@ export function enableReplies(x) {
   x.sql.exec("INSERT INTO email_aura_policies (org_id,aura_id,tier) VALUES ('org_demo_001','aura_demo_001','4'),('org_demo_001','aura_demo_002','4')");
   x.env.DEMO_ORG_ID='org_demo_001'; x.env.AUTO_REPLY_ENABLED='true';
   const replies=[];
-  return { replies, message(to='nova@34five.studio',id='reply-test@example.invalid',extra='',body='A new test message.') {
+  return { replies, message(to='daniel@34five.studio',id='reply-test@example.invalid',extra='',body='A new test message.') {
     const m=email(to,id,extra,body);
     m.reply=async value=>{ replies.push(value); return {messageId:`<out-${replies.length}@cloudflare.example>`}; };
     return m;

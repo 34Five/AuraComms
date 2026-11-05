@@ -115,8 +115,8 @@ test('provisioning adds both real addresses once and preserves existing seed his
   x.sql.exec(sql); x.sql.exec(sql);
   const rows=x.sql.prepare("SELECT a.address,x.aura_id FROM email_addresses a JOIN email_address_assignments x ON x.address_id=a.id AND x.org_id=a.org_id WHERE a.org_id='org_demo_001' AND x.ended_at IS NULL ORDER BY a.address").all();
   assert.deepEqual(rows.map(r=>({...r})),[
-    {address:'lyra@34five.studio',aura_id:'aura_demo_001'},
-    {address:'nova@34five.studio',aura_id:'aura_demo_002'},
+    {address:'daniel@34five.studio',aura_id:'aura_demo_002'},
+    {address:'orbi@34five.studio',aura_id:'aura_demo_001'},
   ]);
   assert.equal(x.sql.prepare('SELECT COUNT(*) AS n FROM email_messages').get().n,before);
   assert.deepEqual(x.sql.prepare('PRAGMA foreign_key_check').all(),[]);
@@ -130,7 +130,7 @@ test('the byte limit still applies when the sender understates rawSize',async t 
   assert.match(msg.rejected,/25 MiB/); assert.equal(x.objects.size,0);
 });
 
-for (const [address,auraId] of [['lyra@34five.studio','aura_demo_001'],['nova@34five.studio','aura_demo_002']]) {
+for (const [address,auraId] of [['orbi@34five.studio','aura_demo_001'],['daniel@34five.studio','aura_demo_002']]) {
   test(`default reply from ${address} is saved in the correct Aura conversation`,async t => {
     const x=setup(t), demo=enableReplies(x);
     await receive(demo.message(address),x.env);
@@ -214,7 +214,7 @@ test('outcome-storage failures never resend an accepted reply',async t => {
 test('disabled replies, test-address senders, ambiguous IDs and long threads fail closed',async t => {
   const x=setup(t), demo=enableReplies(x);
   x.env.AUTO_REPLY_ENABLED='false'; await receive(demo.message(),x.env); x.env.AUTO_REPLY_ENABLED='true';
-  const self=demo.message(undefined,'self@example.invalid'); self.from='lyra@34five.studio'; await receive(self,x.env);
+  const self=demo.message(undefined,'self@example.invalid'); self.from='orbi@34five.studio'; await receive(self,x.env);
   await receive(demo.message(undefined,'ambiguous@example.invalid','Message-ID: <duplicate@example.invalid>\r\n'),x.env);
   const refs=Array.from({length:20},(_,i)=>`<parent-${i}@example.invalid>`).join(' ');
   await receive(demo.message(undefined,'long@example.invalid',`References: ${refs}\r\n`),x.env);
@@ -226,7 +226,7 @@ test('an address disabled during reply preparation cancels the claimed reply',as
   const put=x.env.MAIL.put;
   x.env.MAIL.put=async(key,value)=>{
     await put(key,value);
-    if (key.endsWith('/aura-demo.txt')) x.sql.exec("UPDATE email_addresses SET status='disabled',disabled_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE address_key='nova@34five.studio'");
+    if (key.endsWith('/aura-demo.txt')) x.sql.exec("UPDATE email_addresses SET status='disabled',disabled_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE address_key='daniel@34five.studio'");
   };
   await receive(demo.message(undefined,undefined,'','Please send an attachment'),x.env);
   assert.equal(demo.replies.length,0);
@@ -296,12 +296,12 @@ test('Tier 3 first inbound invalidates proactive approval and requires a reviewe
 
 test('production email entry holds Tier 1 and sends Tier 4 through the binding',async t=>{
   const x=governanceDemo(t);
-  for(const [address,tier] of [['lyra@34five.studio','1'],['iris@34five.studio','4']]){
+  for(const [address,tier] of [['orbi@34five.studio','1'],['sophia@34five.studio','4']]){
     const msg=email(address,`tier-${tier}@example.invalid`);msg.headers.set('Authentication-Results','mx.cloudflare.net; spf=pass; dkim=pass; dmarc=pass');
     await worker.email(msg,x.env);
     assert.equal(x.sql.prepare('SELECT status FROM email_reviews WHERE tier_applied=?').get(tier).status,tier==='1'?'pending':'sent');
   }
-  assert.equal(x.sent.length,1);assert.equal(x.sent[0].from.email,'iris@34five.studio');
+  assert.equal(x.sent.length,1);assert.equal(x.sent[0].from.email,'sophia@34five.studio');
 });
 
 test('edits and policy changes invalidate unsent approvals while preserving revisions',async t=>{
@@ -354,7 +354,7 @@ test('uncertain outcomes retain a capacity reservation and cannot be retried',as
 test('delayed reply path trusts only Cloudflare’s first authentication result',async t=>{
   const x=governanceDemo(t);
   for(const [i,authentication] of ['', 'sender.example; dmarc=pass', 'mx.cloudflare.net; dmarc=fail, mx.cloudflare.net; dmarc=pass'].entries()){
-    const msg=email('iris@34five.studio',`untrusted-${i}@example.invalid`,'X-Aura-Dmarc-Pass: true\r\n');
+    const msg=email('sophia@34five.studio',`untrusted-${i}@example.invalid`,'X-Aura-Dmarc-Pass: true\r\n');
     if(authentication)msg.headers.set('Authentication-Results',authentication);
     await worker.email(msg,x.env);
   }
@@ -365,7 +365,7 @@ test('delayed reply path trusts only Cloudflare’s first authentication result'
 
 
 test('authenticated header sender cannot redirect replies through a different envelope sender',async t=>{
-  const x=governanceDemo(t),msg=email('iris@34five.studio','mismatched-sender@example.invalid');
+  const x=governanceDemo(t),msg=email('sophia@34five.studio','mismatched-sender@example.invalid');
   msg.from='victim@example.invalid';msg.headers.set('Authentication-Results','mx.cloudflare.net; dmarc=pass');
   await worker.email(msg,x.env);assert.equal(x.sent.length,0);
   assert.equal(x.sql.prepare("SELECT COUNT(*) AS n FROM email_messages WHERE org_id='org_demo_001' AND direction='out'").get().n,0);
@@ -390,7 +390,7 @@ test('Aura CRUD uses workspace scope and preserves existing Auras',async t=>{
 });
 test('Aura deletion refuses address or message history and foreign Aura access',async t=>{
   const x=governanceDemo(t),before=x.sql.prepare('SELECT COUNT(*) AS n FROM email_address_assignments').get().n;
-  assert.equal((await manage(x,'auras/aura_demo_003','DELETE',{confirm_name:'Atlas'})).status,409);
+  assert.equal((await manage(x,'auras/aura_demo_003','DELETE',{confirm_name:'Olivia'})).status,409);
   assert.equal((await manage(x,'auras/other_aura','PUT',{name:'Hijacked',previous_name:'Other organization'})).status,404);
   assert.equal(x.sql.prepare('SELECT COUNT(*) AS n FROM email_address_assignments').get().n,before);
 });
@@ -426,10 +426,10 @@ test('reviewer removal and regrant cannot revive previous approvals',async t=>{
   assert.equal((await manage(x,`auras/${a}/reviewers/e07_demo_reviewer`,'PUT',{})).status,404);
 });
 test('address disable and restore preserve history and invalidate unsent decisions',async t=>{
-  const x=governanceDemo(t),a='aura_demo_004',d=await x.compose(a),path=`auras/${a}/addresses/address_iris`;
+  const x=governanceDemo(t),a='aura_demo_004',d=await x.compose(a),path=`auras/${a}/addresses/address_sophia`;
   assert.equal((await manage(x,path,'PUT',{status:'disabled'})).status,200);assert.equal((await x.g.review(a,d.review.id)).status,'superseded');
-  const incoming=email('iris@34five.studio','paused@example.invalid');await receive(incoming,x.env);assert.ok(incoming.rejected);
-  assert.equal((await manage(x,'auras/aura_demo_001/addresses/address_iris','PUT',{status:'active'})).status,404);
+  const incoming=email('sophia@34five.studio','paused@example.invalid');await receive(incoming,x.env);assert.ok(incoming.rejected);
+  assert.equal((await manage(x,'auras/aura_demo_001/addresses/address_sophia','PUT',{status:'active'})).status,404);
   assert.equal((await manage(x,path,'PUT',{status:'active'})).status,200);assert.equal((await x.call(a,`reviews/${d.review.id}/send`,'POST')).status,409);
   assert.equal(x.sql.prepare('SELECT COUNT(*) AS n FROM email_messages WHERE id=?').get(d.message_id).n,1);assert.deepEqual(x.sql.prepare('PRAGMA foreign_key_check').all(),[]);
 });
