@@ -43,6 +43,15 @@ async function activeDomains(env: Env): Promise<Domain[]> {
   return results;
 }
 
+export function validatePrefix(value: unknown, domain: string): string {
+  if (typeof value !== 'string') throw new HttpError(400,'Enter an email prefix.');
+  const prefix=value.trim().toLowerCase();
+  if (!prefix || prefix.length>MAX_LOCAL_PART || !/^[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*$/.test(prefix)) throw new HttpError(400,'Use an email prefix of up to 64 characters without spaces or an @ sign.');
+  if (prefix.length+domain.length+1>MAX_MATCHER_VALUE) throw new HttpError(400,'This email address is too long for routing. Choose a shorter prefix.');
+  return prefix;
+}
+
+
 const choice = (d: Domain) => ({ id: d.id, domain: d.domain, kind: d.kind });
 const noDomain = () => json({ error: 'This organization has no active email domain yet.', reason: 'no_active_domain' }, 409);
 
@@ -176,7 +185,8 @@ export async function generateAddress(request: Request, env: Env, aura: Row): Pr
   }
   const org = env.DEMO_ORG_ID, now = new Date().toISOString();
   for (let attempt = 1; ; attempt++) {
-    const local = await freeLocalPart(env, aura.name, domain);
+    const local = body.local_part===undefined ? await freeLocalPart(env, aura.name, domain) : validatePrefix(body.local_part,domain.domain_key);
+    if(body.local_part!==undefined && await env.DB.prepare('SELECT 1 FROM email_addresses WHERE domain_id=? AND local_part=?').bind(domain.id,local).first()) throw new HttpError(409,'This email address is already reserved. Choose another prefix.');
     const address = `${local}@${domain.domain_key}`;
     const id = `address_${crypto.randomUUID()}`;
     try {
@@ -197,6 +207,7 @@ export async function generateAddress(request: Request, env: Env, aura: Row): Pr
       return json({ address: present((await current(env, aura.id))!) }, 201);
     } catch (error) {
       // Another request took this local part between the read and the batch.
+      if (body.local_part!==undefined && /UNIQUE constraint/.test(String((error as Error).message))) throw new HttpError(409,'This email address is already reserved. Choose another prefix.');
       if (attempt >= CLASH_ATTEMPTS || !/UNIQUE constraint/.test(String((error as Error).message))) throw error;
     }
   }

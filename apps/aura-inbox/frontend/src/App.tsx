@@ -112,6 +112,7 @@ function AddressPanel({ aura, onAddress }: { aura: Aura; onAddress: (auraId: str
   const current = aura.addresses[0];
   const [proposal,setProposal] = useState<ProposedAddress[] | null>(null);
   const [domainId,setDomainId] = useState('');
+  const [prefix,setPrefix] = useState('');
   const [detail,setDetail] = useState<AddressDetail | null>(null);
   const [busy,setBusy] = useState(false);
   const [error,setError] = useState('');
@@ -134,17 +135,18 @@ function AddressPanel({ aura, onAddress }: { aura: Aura; onAddress: (auraId: str
   const accept = (address: AddressDetail) => { setDetail(address); setProposal(null); onAddress(aura.id,address); };
   const propose = () => run(async () => {
     const { domains } = await get<{ domains: ProposedAddress[] }>(`${base}/proposal`);
-    setProposal(domains); setDomainId(domains[0].id);
+    setProposal(domains); setDomainId(domains[0].id); setPrefix(domains[0].address.split('@')[0]);
   });
-  const confirm = () => run(async () => accept((await post<{ address: AddressDetail }>(base,{ domain_id: domainId })).address));
+  const confirm = () => run(async () => accept((await post<{ address: AddressDetail }>(base,{ domain_id: domainId, local_part: prefix })).address));
   const retry = () => run(async () => accept((await post<{ address: AddressDetail }>(`${base}/provision`)).address));
   const errorLine = error && <p className="address-error" role="alert">{error}</p>;
 
   if (!current) return <div className="address-panel">
     {!proposal && <button className="rail-button" disabled={busy} onClick={propose}>{busy ? 'Checking…' : 'Generate email'}</button>}
     {proposal && <>
-      {proposal.length === 1 ? <p className="address-text">{proposal[0].address}</p>
-        : <select className="address-select" aria-label={`Domain for ${aura.name}`} value={domainId} onChange={e => setDomainId(e.target.value)}>{proposal.map(d => <option key={d.id} value={d.id}>{d.address}</option>)}</select>}
+      <label>Email prefix<input required maxLength={64} value={prefix} onChange={e=>setPrefix(e.target.value.toLowerCase())} autoCapitalize="none" autoCorrect="off" spellCheck={false}/></label>
+      {proposal.length>1&&<select className="address-select" aria-label={`Domain for ${aura.name}`} value={domainId} onChange={e=>setDomainId(e.target.value)}>{proposal.map(d=><option key={d.id} value={d.id}>{d.domain}</option>)}</select>}
+      <p className="address-text">{prefix}@{proposal.find(d=>d.id===domainId)?.domain}</p>
       <div className="address-actions"><button className="rail-button" disabled={busy} onClick={confirm}>{busy ? 'Creating…' : 'Create address'}</button><button className="rail-button" disabled={busy} onClick={() => setProposal(null)}>Cancel</button></div>
     </>}
     {errorLine}
