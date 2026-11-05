@@ -1,3 +1,4 @@
+import { sendFailureSummary } from './generated-sender.ts';
 import { authenticationApi, sessionIdentity } from './session-auth.ts';
 import type { Env } from './types.ts';
 import { managementApi } from './management-api.ts';
@@ -20,10 +21,19 @@ function replyFailure(event: Row | undefined): { class: string; summary: string 
 }
 
 // Derived at read time. A generation that died mid-call must not look like it is still running.
-function displayState(row: Row, now: number): 'timed_out' | null {
+function displayState(row: Row, now: number, event?:Row): 'timed_out' | 'send_unknown' | 'send_failed' | null {
   const stalled = row.direction === 'out' && row.status === 'sending' && row.body_storage === 'inline'
     && row.body_text === null && row.body_html === null && now - Date.parse(row.created_at) > STALE_REPLY_MS;
-  return stalled ? 'timed_out' : null;
+  if(stalled)return 'timed_out';
+  if(row.direction==='out' && row.status==='failed' && event?.event_type==='failed')return 'send_failed';
+  if(row.direction==='out' && row.status==='sending' && (event?.event_type==='unknown' || ((row.body_storage==='r2'||row.body_text!==null||row.body_html!==null) && now-Date.parse(row.activity_at)>STALE_REPLY_MS)))return 'send_unknown';
+  return null;
+}
+
+function sendFailure(event?:Row) {
+  if(event?.event_type!=='failed')return null;
+  let payload:Record<string,any>={};try{payload=JSON.parse(event.raw_payload_json);}catch{}
+  return {summary:sendFailureSummary(Number.isInteger(payload.http_status)?payload.http_status:null,Array.isArray(payload.codes)?payload.codes.filter(Number.isInteger):[])};
 }
 
 async function aura(env: Env, id: string): Promise<Row> {
@@ -122,22 +132,24 @@ export async function api(request: Request, env: Env): Promise<Response> {
     const rows = results.slice(0, limit);
     const last = rows.at(-1);
     const ids = rows.map(m => m.id);
-    let recipients: Row[] = [], attachments: Row[] = [], failures: Row[] = [];
+    let recipients: Row[] = [], attachments: Row[] = [], failures: Row[] = [], sends:Row[]=[];
     if (ids.length) {
       const placeholders = ids.map(() => '?').join(',');
-      const [r, a, f] = await Promise.all([
+      const [r, a, f, s] = await Promise.all([
         env.DB.prepare(`SELECT message_id,kind,address,display_name FROM email_message_recipients WHERE org_id=? AND aura_id=? AND kind<>'bcc' AND message_id IN (${placeholders}) ORDER BY ordinal`).bind(org,auraId,...ids).all<Row>(),
         env.DB.prepare(`SELECT id,message_id,filename,content_type,size_bytes FROM email_attachments WHERE org_id=? AND aura_id=? AND message_id IN (${placeholders}) ORDER BY ordinal`).bind(org,auraId,...ids).all<Row>(),
         env.DB.prepare(`SELECT message_id,raw_payload_json FROM email_events WHERE org_id=? AND aura_id=? AND event_type='failed' AND json_extract(raw_payload_json,'$.stage')='generation' AND message_id IN (${placeholders})`).bind(org,auraId,...ids).all<Row>(),
+        env.DB.prepare(`SELECT message_id,event_type,raw_payload_json FROM email_events WHERE org_id=? AND aura_id=? AND (event_type='unknown' OR (event_type='failed' AND json_extract(raw_payload_json,'$.stage')='dispatch')) AND message_id IN (${placeholders}) ORDER BY occurred_at DESC`).bind(org,auraId,...ids).all<Row>(),
       ]);
-      recipients = r.results; attachments = a.results; failures = f.results;
+      recipients = r.results; attachments = a.results; failures = f.results; sends=s.results;
     }
     const now = Date.now();
     return json({ thread, messages: rows.reverse().map(row => ({ ...row,
       recipients: recipients.filter(r => r.message_id === row.id),
       attachments: attachments.filter(a => a.message_id === row.id),
       failure: replyFailure(failures.find(f => f.message_id === row.id)),
-      display_state: displayState(row, now),
+      send_failure: sendFailure(sends.find(s=>s.message_id===row.id)),
+      display_state: displayState(row, now,sends.find(s=>s.message_id===row.id)),
     })), nextCursor: results.length > limit && last ? encodeCursor(last.activity_at,last.id) : null });
   }
   if (parts[3] === 'messages' && parts[4]) {
