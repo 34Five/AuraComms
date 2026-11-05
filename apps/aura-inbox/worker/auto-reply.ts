@@ -36,7 +36,9 @@ export async function autoReply(message: ForwardableEmailMessage, env: Env, pars
   const log = (event: string, fields: Record<string, unknown> = {}) => console.log(JSON.stringify({ event, message_id: context.message_id, ...fields }));
   const skip = (reason: string) => log('inbox_auto_reply_skipped', { reason });
   if (typeof message.reply !== 'function' && message.headers.get('x-aura-dmarc-pass') !== 'true') return skip('sender_not_authenticated');
-  if (env.AUTO_REPLY_MODE !== 'llm' && !ADDRESSES.has(address)) return skip('not_test_address');
+  const generatedAddress=!ADDRESSES.has(address) && !!await env.DB.prepare('SELECT 1 FROM email_address_provisioning WHERE org_id=? AND address_id=?').bind(context.org_id,context.address_id).first();
+  const useLlm=env.AUTO_REPLY_MODE==='llm' || generatedAddress;
+  if (!useLlm && !ADDRESSES.has(address)) return skip('not_test_address');
   if (!/^[^\s<>@,;\x00-\x1f\x7f]+@[^\s<>@,;\x00-\x1f\x7f]+$/.test(message.from)) return skip('invalid_sender');
   const sender = message.from.toLowerCase();
   if (parsed.from?.address?.toLowerCase() !== sender) return skip('sender_header_mismatch');
@@ -69,7 +71,6 @@ export async function autoReply(message: ForwardableEmailMessage, env: Env, pars
     .bind(context.org_id,context.aura_id,context.assignment_id,context.address_id,new Date().toISOString(),address).first<{ name: string }>();
   const active = await activeRoute();
   if (!active) return skip('assignment_no_longer_active');
-  const useLlm = env.AUTO_REPLY_MODE === 'llm';
   if (useLlm) {
     const reason = await llmCapReached(env,context,sender);
     if (reason) return log('inbox_llm_reply_skipped',{ reason });

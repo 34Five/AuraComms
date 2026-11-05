@@ -89,3 +89,43 @@ test('invalid, reserved, and unverified-domain addresses fail before creating an
  assert.equal((await x.call('/auras','POST',{name:'Wrong domain',generate_email:true,domain_id:'foreign',local_part:'valid'})).status,409);
  assert.equal(x.sql.prepare('SELECT count(*) n FROM auras').get().n,before);
 });
+
+
+test('reserved hand-routed names fail before creating Aura or address records',async t=>{
+ const x=world(t),calls=transport(t),auras=x.sql.prepare('SELECT count(*) n FROM auras').get().n,addresses=x.sql.prepare('SELECT count(*) n FROM email_addresses').get().n;
+ for(const local_part of ['anthony','melina','merlin','spike-test','operations','notifications-test','postmaster','abuse','admin']){
+  const response=await x.call('/auras','POST',{name:'Reserved',generate_email:true,domain_id:'domain_default',local_part});assert.equal(response.status,409,local_part);
+ }
+ assert.equal(x.sql.prepare('SELECT count(*) n FROM auras').get().n,auras);assert.equal(x.sql.prepare('SELECT count(*) n FROM email_addresses').get().n,addresses);assert.equal(calls.length,0);
+});
+
+test('a reservation race returns 409 and cleans up the unassigned new Aura',async t=>{
+ const x=world(t);transport(t);const batch=x.env.DB.batch,auras=x.sql.prepare('SELECT count(*) n FROM auras').get().n;
+ let calls=0;x.env.DB.batch=async statements=>{calls++;if(calls===2)throw new Error('UNIQUE constraint failed: email_addresses.domain_id, email_addresses.local_part');return batch(statements);};
+ const response=await x.call('/auras','POST',{name:'Race',generate_email:true,domain_id:'domain_default',local_part:'race-check'});
+ assert.equal(response.status,409);assert.match((await response.json()).error,/already reserved/);assert.equal(x.sql.prepare('SELECT count(*) n FROM auras').get().n,auras);
+});
+
+test('an existing address rejects a different requested prefix or domain',async t=>{
+ const x=world(t);transport(t);const id=await megan(x);await generate(x,id);
+ for(const body of [{local_part:'another-prefix'},{domain_id:'another-domain'}])assert.equal((await x.call(`/auras/${id}/address`,'POST',body)).status,409);
+});
+
+test('fixed mode keeps existing demo replies fixed while generated addresses use LLM',async t=>{
+ const x=world(t),calls=transport(t),id=await megan(x);x.env.AUTO_REPLY_MODE='fixed';await generate(x,id);
+ const message=email('megan@demo.34five.studio');message.headers.set('Authentication-Results','mx.cloudflare.net; dmarc=pass');await worker.email(message,x.env);
+ assert.ok(calls.some(c=>c.url.includes('generativelanguage')));assert.equal(x.sql.prepare("SELECT status FROM email_messages WHERE aura_id=? AND direction='out'").get(id).status,'sent');
+});
+
+test('a foreign same-worker rule is not adopted',async t=>{
+ const x=world(t),id=await megan(x);
+ t.mock.method(globalThis,'fetch',async()=>Response.json({success:true,result:[{name:'Foreign manual rule',id:'manual',enabled:true,matchers:[{type:'literal',field:'to',value:'megan@demo.34five.studio'}],actions:[{type:'worker',value:['aura-inbox-test']}]}]}));
+ const result=await (await generate(x,id)).json();assert.equal(result.address.provisioning.status,'failed');
+});
+
+test('routing calls share a total deadline smaller than the coordinator reset',async t=>{
+ const x=world(t),id=await megan(x),timeout=AbortSignal.timeout,limits=[];
+ t.mock.method(AbortSignal,'timeout',ms=>{limits.push(ms);return ms===12000?AbortSignal.abort():timeout(ms);});
+ t.mock.method(globalThis,'fetch',async(_url,init)=>{init.signal.throwIfAborted();throw Error('unreachable');});
+ const result=await (await generate(x,id)).json();assert.equal(result.address.provisioning.status,'failed');assert.ok(limits.includes(12000));
+});

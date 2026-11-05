@@ -30,9 +30,23 @@ export async function managementApi(request: Request, env: Env): Promise<Respons
       g.q('INSERT INTO email_aura_reviewers (org_id,aura_id,member_id,configured_by_member_id) VALUES (?,?,?,?)',g.org,aura,member,member),
     ]);
     if(data.generate_email) {
-      const result=await generateAddress(new Request(request.url,{method:'POST',body:JSON.stringify({domain_id:data.domain_id,local_part:data.local_part})}),env,{id:aura,name});
-      const body=await result.json() as {address?:{provisioning:{status:string}};error?:string};
-      return json({aura:{id:aura,name,role},...body,message:body.address?.provisioning.status==='active'?'Aura and email created. Incoming mail is ready; replies follow its governance tier.':'Aura created. Email setup needs attention; retry from Aura configuration.'},201);
+      const cleanup=async()=>{
+        // Only remove this newly-created Aura when no assignment was committed.
+        if(await g.q('SELECT 1 FROM email_address_assignments WHERE org_id=? AND aura_id=?',g.org,aura).first())return;
+        await env.DB.batch([
+          g.q('DELETE FROM email_aura_reviewers WHERE org_id=? AND aura_id=?',g.org,aura),
+          g.q('DELETE FROM email_aura_policies WHERE org_id=? AND aura_id=?',g.org,aura),
+          g.q('DELETE FROM auras WHERE org_id=? AND id=?',g.org,aura),
+        ]);
+      };
+      try {
+        const result=await generateAddress(new Request(request.url,{method:'POST',body:JSON.stringify({domain_id:data.domain_id,local_part:data.local_part})}),env,{id:aura,name});
+        const body=await result.json() as {address?:{provisioning:{status:string}};error?:string};
+        if(!result.ok) {await cleanup();return json(body,result.status);}
+        if(!body.address) {await cleanup();throw new HttpError(502,'Email setup returned no address.');}
+        return json({aura:{id:aura,name,role},...body,message:body.address.provisioning.status==='active'?'Aura and email created. Incoming mail is ready; replies follow its governance tier.':'Aura created. Email setup needs attention; retry from Aura configuration.'},201);
+      } catch(error) {await cleanup();throw error;}
+
     }
     return json({aura:{id:aura,name,role},message:'Aura created. Generate an email address in its configuration.'},201);
   }

@@ -1,2 +1,7 @@
 GEMINI_API_KEY=
 ANTHROPIC_API_KEY=
+
+# Same dedicated value on both Workers; never reuse a provider key.
+ADDRESS_PROVISIONING_SECRET=
+# Studio only: scoped token for the company zone Email Routing / Sending APIs.
+CLOUDFLARE_DOMAIN_API_TOKEN=
