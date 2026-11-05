@@ -70,3 +70,22 @@ test('inbox provisioning bridge only accepts its dedicated server secret',async 
  const request=token=>worker.fetch(new Request('https://inbox.example/internal/provision-address',{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({aura_id:id})}),x.env);
  assert.equal((await request('wrong')).status,404);assert.equal((await request('bridge-secret')).status,200);
 });
+
+test('one Create operation provisions the chosen prefix and domain without a second setup action',async t=>{
+ const x=world(t),calls=transport(t);
+ const response=await x.call('/auras','POST',{name:'New colleague',role:'Assistant',tier:'1',generate_email:true,domain_id:'domain_default',local_part:'CUSTOM.prefix'});
+ assert.equal(response.status,201);const data=await response.json();assert.equal(data.address.address,'custom.prefix@demo.34five.studio');assert.equal(data.address.provisioning.status,'active');assert.match(data.message,/Incoming mail is ready/);
+ const assignment=x.sql.prepare('SELECT aura_id FROM email_address_assignments WHERE address_id=?').get(data.address.id);assert.equal(assignment.aura_id,data.aura.id);
+ assert.equal(calls.filter(c=>c.init.method==='POST').length,1);
+});
+
+test('invalid, reserved, and unverified-domain addresses fail before creating an Aura',async t=>{
+ const x=world(t);transport(t);
+ const before=x.sql.prepare('SELECT count(*) n FROM auras').get().n;
+ for(const local_part of ['a@b','two words','.leading','trailing.','two..dots','a'.repeat(65)]){
+  const response=await x.call('/auras','POST',{name:'Invalid',generate_email:true,domain_id:'domain_default',local_part});assert.equal(response.status,400,local_part);
+ }
+ assert.equal((await x.call('/auras','POST',{name:'Taken',generate_email:true,domain_id:'domain_default',local_part:'sales'})).status,409);
+ assert.equal((await x.call('/auras','POST',{name:'Wrong domain',generate_email:true,domain_id:'foreign',local_part:'valid'})).status,409);
+ assert.equal(x.sql.prepare('SELECT count(*) n FROM auras').get().n,before);
+});
