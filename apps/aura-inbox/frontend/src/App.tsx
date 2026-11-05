@@ -210,10 +210,17 @@ export function App({navigate,user,onLogout,logoutBusy}: {navigate:(path:string)
   return <div className={`app ${threadId ? 'has-conversation' : ''}`}>
     <aside className="sidebar">
       <a href="/" className="brand">34Five<small>Aura inbox</small></a>
-      <nav className="workspace-nav" aria-label="Workspace pages"><a className="active" href="/" aria-current="page" onClick={e=>{e.preventDefault();navigate('/');}}>Inbox</a><a href="/governance" onClick={e=>{e.preventDefault();navigate(`/governance?aura=${auraId}`);}}>Governance</a>{user.role!=='reviewer'&&<><a href="/auras" onClick={e=>{e.preventDefault();navigate('/auras');}}>Aura management</a><a href="/email-settings" onClick={e=>{e.preventDefault();navigate('/email-settings');}}>Company email domains</a></>}{user.role==='admin'&&<a href="/users" onClick={e=>{e.preventDefault();navigate('/users');}}>User management</a>}</nav>
+      <nav className="workspace-nav" aria-label="Workspace pages"><a className="active" href="/" aria-current="page" onClick={e=>{e.preventDefault();navigate('/');}}>Inbox</a><a href="/governance" onClick={e=>{e.preventDefault();navigate(`/governance?aura=${auraId}`);}}>Governance</a>{user.role!=='reviewer'&&<><a href="/auras" onClick={e=>{e.preventDefault();navigate('/auras');}}>Email management</a><a href="/email-settings" onClick={e=>{e.preventDefault();navigate('/email-settings');}}>Company email domains</a></>}{user.role==='admin'&&<a href="/users" onClick={e=>{e.preventDefault();navigate('/users');}}>User management</a>}</nav>
       <div className="section-label">Aura inboxes</div>
       <nav className="aura-nav" aria-label="Aura inboxes">{auras.map((a,index) => <button key={a.id} className={`aura-button ${a.id === auraId ? 'active' : ''}`} onClick={() => { setAuraId(a.id); setThreadId(''); setSearch(''); setStatus(''); }} aria-current={a.id === auraId ? 'page' : undefined}>
-        <span className={`aura-avatar tone-${index%3}`}>{initials(a.name.replace(' Aura',''))}</span><span className="aura-label"><strong>{a.name.replace(/ Aura$/,'')}</strong><small>{a.addresses.find(x => x.domain_status === 'active')?.address || 'No receiving address'}</small></span><span className="aura-count">{a.tier && <span className="sidebar-tier" title={TIER_LABELS[a.tier]}>T{a.tier}</span>}{a.pending_count > 0 ? `${a.pending_count} pending` : a.thread_count}</span>
+        <span className={`aura-avatar tone-${index%3}`} aria-hidden="true">{initials(a.name.replace(' Aura',''))}</span>
+        <span className="aura-label">
+          <span className="aura-name-row"><strong>{a.name.replace(/ Aura$/,'')}</strong>
+            {a.tier && <span className="sidebar-tier" title={TIER_LABELS[a.tier]} aria-label={`Tier ${a.tier}: ${TIER_LABELS[a.tier]}`}>Tier {a.tier}</span>}
+          </span>
+          <small title={a.addresses.find(x => x.domain_status === 'active')?.address}>{a.addresses.find(x => x.domain_status === 'active')?.address || 'No receiving address'}</small>
+          {a.pending_count > 0 && <span className="aura-review-badge" aria-label={`${a.pending_count} ${a.pending_count===1?'draft':'drafts'} awaiting review`}>{a.pending_count} to review</span>}
+        </span>
       </button>)}</nav>
       <div className="test-note"><strong>{user.name}</strong>{user.role[0].toUpperCase()+user.role.slice(1)} · Demo workspace<button className="sidebar-signout" disabled={logoutBusy} onClick={onLogout}>{logoutBusy?'Signing out…':'Sign out'}</button></div>
     </aside>
