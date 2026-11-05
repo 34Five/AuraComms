@@ -1,3 +1,4 @@
+import { readAddress, proposeAddress, generateAddress, retryProvisioning } from './address.ts';
 import { Governance } from './governance.ts';
 import { authorizeManagement, managementBody, requireRole } from './management-auth.ts';
 import { userManagement, workspaceUsers } from './user-management.ts';
@@ -31,6 +32,16 @@ export async function managementApi(request: Request, env: Env): Promise<Respons
   if (resource==='auras' && id) {
     const row=await g.one('SELECT * FROM auras WHERE org_id=? AND id=?',g.org,id);
     const aura={id:row.id,name:row.name,role:auraConfig(row).role};
+    if (parts[4]==='address') {
+      if(parts.length===5 && request.method==='GET') return readAddress(env,id);
+      if(parts.length===6 && parts[5]==='proposal' && request.method==='GET') return proposeAddress(env,aura);
+      if(request.method==='POST') {
+        const body=await managementBody(request);
+        if(parts.length===5) return generateAddress(new Request(request.url,{method:'POST',body:JSON.stringify(body)}),env,aura);
+        if(parts.length===6 && parts[5]==='provision') return retryProvisioning(env,id);
+      }
+      throw new HttpError(405,'Method not allowed.');
+    }
     if (parts.length===4 && request.method==='GET') {
       const addresses=await g.q(`SELECT a.id,a.address,a.status,d.domain,d.status AS domain_status,x.id AS assignment_id FROM email_addresses a
         JOIN email_address_assignments x ON x.org_id=a.org_id AND x.address_id=a.id JOIN email_domains d ON d.org_id=a.org_id AND d.id=a.domain_id

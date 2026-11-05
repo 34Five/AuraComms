@@ -1,3 +1,5 @@
+import { tokenHash } from './auth-utils.ts';
+import { equalHash } from './password.ts';
 import { HttpError, type Env } from './types.ts';
 import { json, readBounded } from './utils.ts';
 export { GovernanceCoordinator } from './coordinator.ts';
@@ -10,6 +12,11 @@ function coordinator(env: Env) {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const path = new URL(request.url).pathname;
+    if (path === '/internal/provision-address') {
+      const token=request.headers.get('authorization')?.replace(/^Bearer /,'') ?? '';
+      if(request.method!=='POST' || !env.ADDRESS_PROVISIONING_SECRET || token.length>256 || !await equalHash(await tokenHash(token),await tokenHash(env.ADDRESS_PROVISIONING_SECRET))) return new Response('Not found',{status:404});
+      return coordinator(env).fetch(request);
+    }
     if (path !== '/api' && !path.startsWith('/api/')) {
       const response = await env.ASSETS.fetch(request);
       const secured = new Response(response.body, response);

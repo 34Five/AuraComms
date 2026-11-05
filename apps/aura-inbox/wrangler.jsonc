@@ -12,7 +12,7 @@
     "not_found_handling": "single-page-application",
     "run_worker_first": ["/api", "/api/*"]
   },
-  "vars": { "DEMO_ORG_ID": "org_demo_001", "TEST_MODE": "true", "DEMO_LOGIN_ENABLED": "true", "AUTO_REPLY_ENABLED": "true", "AUTO_REPLY_MODE": "fixed", "DEFAULT_LLM_MODEL": "gemini:gemini-3.5-flash-lite", "LLM_SENDER_HOURLY_CAP": "10", "LLM_AURA_DAILY_CAP": "200", "GOVERNANCE_REVIEWER_MEMBER_ID": "member_demo_001", "CLOUDFLARE_ACCOUNT_ID": "3973e13ac59e8e3799ee812ad57ad3cb", "DEFAULT_EMAIL_DOMAIN": "34five.studio", "DEFAULT_EMAIL_ZONE_ID": "1c60311626bbfe94b6fe3496d15de727", "TENANT_COMPANY_NAME": "Axia" },
+  "vars": { "DEMO_ORG_ID": "org_demo_001", "TEST_MODE": "true", "DEMO_LOGIN_ENABLED": "true", "AUTO_REPLY_ENABLED": "true", "AUTO_REPLY_MODE": "llm", "DEFAULT_LLM_MODEL": "gemini:gemini-3.5-flash-lite", "LLM_SENDER_HOURLY_CAP": "10", "LLM_AURA_DAILY_CAP": "200", "GOVERNANCE_REVIEWER_MEMBER_ID": "member_demo_001", "CLOUDFLARE_ACCOUNT_ID": "3973e13ac59e8e3799ee812ad57ad3cb", "DEFAULT_EMAIL_DOMAIN": "34five.studio", "DEFAULT_EMAIL_ZONE_ID": "1c60311626bbfe94b6fe3496d15de727", "TENANT_COMPANY_NAME": "Axia" },
   "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["orbi@34five.studio", "daniel@34five.studio", "olivia@34five.studio", "sophia@34five.studio"] }],
   "durable_objects": { "bindings": [{ "name": "GOVERNANCE", "class_name": "GovernanceCoordinator" }] },
   "migrations": [{ "tag": "governance-v1", "new_sqlite_classes": ["GovernanceCoordinator"] }],

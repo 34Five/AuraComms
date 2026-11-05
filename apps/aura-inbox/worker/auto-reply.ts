@@ -36,11 +36,12 @@ export async function autoReply(message: ForwardableEmailMessage, env: Env, pars
   const log = (event: string, fields: Record<string, unknown> = {}) => console.log(JSON.stringify({ event, message_id: context.message_id, ...fields }));
   const skip = (reason: string) => log('inbox_auto_reply_skipped', { reason });
   if (typeof message.reply !== 'function' && message.headers.get('x-aura-dmarc-pass') !== 'true') return skip('sender_not_authenticated');
-  if (!ADDRESSES.has(address)) return skip('not_test_address');
+  if (env.AUTO_REPLY_MODE !== 'llm' && !ADDRESSES.has(address)) return skip('not_test_address');
   if (!/^[^\s<>@,;\x00-\x1f\x7f]+@[^\s<>@,;\x00-\x1f\x7f]+$/.test(message.from)) return skip('invalid_sender');
   const sender = message.from.toLowerCase();
   if (parsed.from?.address?.toLowerCase() !== sender) return skip('sender_header_mismatch');
-  if (ADDRESSES.has(sender) || sender === 'spike-test@34five.studio' || /^(?:mailer-daemon|postmaster|no-?reply)@/i.test(sender)) return skip('automated_sender');
+  const auraSender = await env.DB.prepare('SELECT 1 FROM email_addresses WHERE address_key=?').bind(sender).first();
+  if (auraSender || ADDRESSES.has(sender) || sender === 'spike-test@34five.studio' || /^(?:mailer-daemon|postmaster|no-?reply)@/i.test(sender)) return skip('automated_sender');
   const values = (name: string) => {
     const found = parsed.headers.filter(h => h.key === name).map(h => h.value);
     return found.length ? found : [message.headers.get(name) ?? ''].filter(Boolean);
