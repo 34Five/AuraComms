@@ -27,6 +27,7 @@
   "env": {
     "demo": {
       "name": "aura-inbox-demo",
+      "services": [{"binding":"ADDRESS_PROVISIONER","service":"aura-inbox-test"}],
       "workers_dev": false,
       "routes": [{ "pattern": "inbox-demo.34five.studio", "custom_domain": true }],
       "vars": {

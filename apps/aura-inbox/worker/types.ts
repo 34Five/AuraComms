@@ -1,5 +1,7 @@
 export interface Env {
   DB: D1Database;
+  ADDRESS_PROVISIONING_SECRET?: string;
+  ADDRESS_PROVISIONER?: Fetcher;
   MAIL: R2Bucket;
   ASSETS: Fetcher;
   EMAIL: SendEmail;

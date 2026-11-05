@@ -111,6 +111,18 @@ async function ensureRule(env: Env, zone: string, address: string, worker: strin
 
 // Never throws for a Cloudflare problem: the address exists either way, and retry can finish it.
 async function provision(env: Env, row: Row): Promise<void> {
+  if (env.ADDRESS_PROVISIONER && env.ADDRESS_PROVISIONING_SECRET) {
+    try {
+      const assigned=await env.DB.prepare('SELECT aura_id FROM email_address_assignments WHERE org_id=? AND address_id=? AND ended_at IS NULL').bind(env.DEMO_ORG_ID,row.id).first<{aura_id:string}>();
+      if(!assigned) throw new ProvisioningError('The address has no active Aura assignment.');
+      const response=await env.ADDRESS_PROVISIONER.fetch(new Request('https://provisioner/internal/provision-address',{method:'POST',headers:{Authorization:`Bearer ${env.ADDRESS_PROVISIONING_SECRET}`,'Content-Type':'application/json'},body:JSON.stringify({aura_id:assigned.aura_id})}));
+      if(!response.ok) throw new ProvisioningError('Email setup service is unavailable. Retry or contact an administrator.');
+      return;
+    } catch {
+      await env.DB.prepare("UPDATE email_address_provisioning SET status='failed',failure_reason=?,updated_at=? WHERE org_id=? AND address_id=?").bind('Email setup service is unavailable. Retry or contact an administrator.',new Date().toISOString(),env.DEMO_ORG_ID,row.id).run();
+      return;
+    }
+  }
   const worker = env.DEMO_WORKER_NAME || DEFAULT_WORKER;
   let status = 'provisioning_pending', ruleId: string | null = null, reason: string | null = null;
   if (env.CF_API_TOKEN && env.CF_ZONE_ID) {
@@ -151,7 +163,7 @@ export async function proposeAddress(env: Env, aura: Row): Promise<Response> {
 export async function generateAddress(request: Request, env: Env, aura: Row): Promise<Response> {
   const body = await readBody(request);
   const existing = await current(env, aura.id);
-  if (existing) return json({ address: present(existing) });
+  if (existing) return retryProvisioning(env,aura.id);
   const domains = await activeDomains(env);
   if (!domains.length) return noDomain();
   let domain = domains[0];
