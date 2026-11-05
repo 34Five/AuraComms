@@ -246,7 +246,7 @@ export class Governance {
     if (r.decision_source === 'human') await this.reviewer(aura,r.approver_member_id);
     const claim = await this.q("UPDATE email_messages SET status='sending' WHERE org_id=? AND aura_id=? AND id=? AND status IN ('draft','queued')",this.org,aura,m.id).run();
     if (!claim.meta.changes) throw new HttpError(409,'This message already has a send claim.');
-    let result: EmailSendResult;
+    let result: {messageId:string|null};
     try {
       // Native replies cannot carry CC/BCC. Use the sending binding whenever copies exist.
       result = nativeReply && !byKind('cc').length && !byKind('bcc').length
@@ -262,7 +262,7 @@ export class Governance {
     const now = new Date().toISOString();
     try {
       await this.env.DB.batch([
-        this.q("UPDATE email_messages SET status='sent',sent_at=?,activity_at=?,provider_message_id=?,rfc_message_id=? WHERE org_id=? AND aura_id=? AND id=?",now,now,result.messageId,result.messageId.replace(/^<|>$/g,''),this.org,aura,m.id),
+        this.q("UPDATE email_messages SET status='sent',sent_at=?,activity_at=?,provider_message_id=?,rfc_message_id=? WHERE org_id=? AND aura_id=? AND id=?",now,now,result.messageId,result.messageId?.replace(/^<|>$/g,'') ?? null,this.org,aura,m.id),
         this.q("UPDATE email_reviews SET status='sent',sent_at=? WHERE org_id=? AND aura_id=? AND id=?",now,this.org,aura,id),
         this.q("UPDATE email_message_recipients SET delivery_status='accepted',delivery_status_at=? WHERE org_id=? AND aura_id=? AND message_id=?",now,this.org,aura,m.id),
         this.q("UPDATE email_threads SET tier_state='sent',last_activity_at=MAX(last_activity_at,?),state_version=state_version+1 WHERE org_id=? AND aura_id=? AND id=?",now,this.org,aura,m.thread_id),

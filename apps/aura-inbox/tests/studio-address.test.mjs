@@ -54,7 +54,7 @@ for(const tier of ['1','4'])test(`generated Tier ${tier} address receives mail, 
   const g=new Governance(x.env);await g.decide(id,review.id,'e07_demo_reviewer','approved');await g.dispatch(id,review.id);
  }
  const sent=x.sql.prepare('SELECT * FROM email_messages WHERE id=?').get(draft.id);assert.equal(sent.status,'sent');
- const send=calls.find(c=>c.url.endsWith('/email/sending/send'));assert.equal(send.body.from.email,'megan@demo.34five.studio');assert.match(send.body.headers['In-Reply-To'],/new@example.invalid/);assert.match(send.body.headers['Message-ID'],/@demo.34five.studio>/);
+ const send=calls.find(c=>c.url.endsWith('/email/sending/send'));assert.equal(send.body.from.email,'megan@demo.34five.studio');assert.match(send.body.headers['In-Reply-To'],/new@example.invalid/);assert.equal(send.body.headers['Message-ID'],undefined);assert.equal(send.body.reply_to,'megan@demo.34five.studio');assert.equal(send.body.replyTo,undefined);assert.equal(sent.rfc_message_id,null);
 });
 
 test('generation requires management authorization and same-origin JSON, and cannot cross tenants',async t=>{
