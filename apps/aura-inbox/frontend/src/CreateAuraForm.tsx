@@ -4,7 +4,7 @@ import {TIER_LABELS} from './GovernancePanel';
 
 type Requester=(path:string,method?:string,body?:unknown,signal?:AbortSignal)=>Promise<any>;
 type Domain={id:string;domain:string};
-const prefixFor=(name:string)=>name.trim()?emailSlug(name).slice(0,64).replace(/-+$/g,''):'';
+const prefixFor=(name:string)=>name.trim()?emailSlug(name).slice(0,64).replace(/[.-]+$/g,''):'';
 export function CreateAuraForm({request,onCreated,onBusy}:{request:Requester;onCreated:(data:any)=>void;onBusy:(value:boolean)=>void}) {
   const [name,setName]=useState(''),[role,setRole]=useState('General assistant'),[tier,setTier]=useState('1');
   const [prefix,setPrefix]=useState(''),[edited,setEdited]=useState(false),[domains,setDomains]=useState<Domain[]>([]),[domain,setDomain]=useState('');

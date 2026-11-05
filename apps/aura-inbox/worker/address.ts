@@ -1,4 +1,5 @@
-import { emailSlug, validateEmailPrefix, isReservedPrefix, EmailPrefixError } from '../shared/email-prefix.ts';
+import { demoPersona } from './llm/demo-personas.ts';
+import { emailSlug, validateEmailPrefix, isReservedPrefix, existingPrefixNeedsManualRouting, EmailPrefixError } from '../shared/email-prefix.ts';
 import type { Env } from './types.ts';
 import { HttpError } from './types.ts';
 import { json } from './utils.ts';
@@ -161,7 +162,12 @@ export async function readAddress(env: Env, auraId: string): Promise<Response> {
   return json({ address: present(row) });
 }
 
+function requireAuthoritativePersona(env: Env, auraId: string) {
+  if(demoPersona({org_id:env.DEMO_ORG_ID,id:auraId})) throw new HttpError(409,'Email generation for this demo Aura is paused until its client-provided configuration replaces the temporary persona.');
+}
+
 export async function proposeAddress(env: Env, aura: Row): Promise<Response> {
+  requireAuthoritativePersona(env,aura.id);
   const domains = await activeDomains(env);
   if (!domains.length) return noDomain();
   return json({ domains: await Promise.all(domains.map(async d => ({ ...choice(d),
@@ -169,6 +175,7 @@ export async function proposeAddress(env: Env, aura: Row): Promise<Response> {
 }
 
 export async function generateAddress(request: Request, env: Env, aura: Row): Promise<Response> {
+  requireAuthoritativePersona(env,aura.id);
   const body = await readBody(request);
   const existing = await current(env, aura.id);
   if (existing) {
@@ -226,8 +233,11 @@ export async function retryProvisioning(env: Env, auraId: string): Promise<Respo
   if (row.status !== 'active' || row.domain_status !== 'active') {
     return json({ error: 'This address is not active, so it cannot be provisioned.', reason: 'address_not_active' }, 409);
   }
-  if(row.provisioning_status) validatePrefix(row.address.split('@')[0],row.domain);
-  if (!row.provisioning_status) return json({ address: present(row) });
+  if ((row.provisioning_status ?? 'active') === 'active') return json({ address: present(row) });
+  if(existingPrefixNeedsManualRouting(row.address.split('@')[0],row.domain)) {
+    return json({error:'This existing address uses a reserved or legacy prefix. Its address is preserved; an administrator must check its routing manually.',reason:'manual_routing_required',address:present(row)},409);
+  }
+  requireAuthoritativePersona(env,auraId);
   await provision(env, row);
   return json({ address: present((await current(env, auraId))!) });
 }

@@ -15,7 +15,7 @@ export class GovernanceCoordinator {
       try {
         if (new URL(request.url).pathname === '/internal/provision-address') {
           const data=await managementBody(request);
-          return retryProvisioning(this.env,requireId(data.aura_id));
+          return await retryProvisioning(this.env,requireId(data.aura_id));
         }
         if (new URL(request.url).pathname === '/internal/ingest') {
           const raw = new Uint8Array(await request.arrayBuffer());

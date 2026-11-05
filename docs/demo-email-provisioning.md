@@ -21,7 +21,7 @@ Should email generation remain in both interfaces, or live exclusively in Studio
 
 ## Verification
 
-Replica: 270 app tests. Inbox: 281 app tests. Schema/governance: 79 tests. Typecheck, builds and Wrangler dry runs pass. Provider transport is mocked in automated tests. The user will perform the external mailbox delivery test themselves.
+Replica: 294 app tests. Inbox: 303 app tests. Schema/governance: 79 tests. Typecheck, builds and Wrangler dry runs pass. Provider transport is mocked in automated tests. The user will perform the external mailbox delivery test themselves.
 
 ## Deployed demo
 
@@ -50,3 +50,14 @@ Do not merge the replica base wholesale into `spikes/cf-email`. The follow-up in
 5. Preserve both Workers' resource bindings, Merlin/Atlas/Anthony behavior, governance prerequisites and the `no-reply` sender used for invite codes.
 
 These items remain unresolved in the base branch and the deployed replica. The provisioning fixes do not claim the base branch is ready for full integration.
+
+## Round 2 review (skyaxia plain comments)
+
+- Existing active assignments, including reserved or legacy prefixes, return unchanged without a provider call. Pending reserved/legacy assignments return `manual_routing_required` with the address preserved; they are not told to choose a prefix they cannot change.
+- New-prefix reservations include Orbi/Daniel/Olivia/Sophia, older persona names, spike-test-2 and mailer-daemon. Reservation comparisons strip dots/hyphens on both sides. The policy remains identical on both branches.
+- Internal retry is awaited inside the coordinator catch. Tests cover unknown Aura (404), pending reserved address (409), thrown persona rejection (409) and subsequent coordinator requests.
+- Studio generation/proposals and pending delegated retries are blocked for the five temporary persona Aura IDs, including renamed records, until the base persona code is removed. Existing active assignments are untouched.
+- Prefix suggestions trim trailing dots as well as hyphens after truncation.
+- The inbox runbook now describes the generated Atlas suffix, the Studio routing target and governance approval/send actions. Delegation replaces stale failure reasons; its target name comes from `ADDRESS_PROVISIONER_WORKER`; direct Cloudflare errors expose codes only.
+
+Reply behavior is intentional: the four predefined Studio routes remain in `fixed` mode by default, as requested in round 1, while newly generated ordinary Aura addresses opt into LLM replies and retain their governance tiers. This PR does not silently enable LLM/persona replies for those four predefined identities. No policy tiers or existing identities are renamed by this fix.

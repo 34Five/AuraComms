@@ -129,3 +129,33 @@ test('routing calls share a total deadline smaller than the coordinator reset',a
  t.mock.method(globalThis,'fetch',async(_url,init)=>{init.signal.throwIfAborted();throw Error('unreachable');});
  const result=await (await generate(x,id)).json();assert.equal(result.address.provisioning.status,'failed');assert.ok(limits.includes(12000));
 });
+
+
+test('internal retry handles unknown Aura and reserved address without rejecting the coordinator barrier',async t=>{
+ const x=world(t);x.env.ADDRESS_PROVISIONING_SECRET='bridge-secret';
+ const internal=id=>worker.fetch(new Request('https://inbox.example/internal/provision-address',{method:'POST',headers:{Authorization:'Bearer bridge-secret','Content-Type':'application/json'},body:JSON.stringify({aura_id:id})}),x.env);
+ assert.equal((await internal('unknown_aura')).status,404);
+ const id=await megan(x);x.sql.prepare('INSERT INTO email_addresses(id,org_id,domain_id,local_part,address,address_key) VALUES (?,?,?,?,?,?)').run('old_atlas',ORG,'domain_default','atlas','atlas@demo.34five.studio','atlas@demo.34five.studio');
+ x.sql.prepare('INSERT INTO email_address_assignments(id,org_id,address_id,aura_id,assigned_at) VALUES (?,?,?,?,?)').run('old_atlas_assignment',ORG,'old_atlas',id,new Date().toISOString());
+ x.sql.prepare('INSERT INTO email_address_provisioning(org_id,address_id,status,worker_name,updated_at) VALUES (?,?,?,?,?)').run(ORG,'old_atlas','provisioning_pending','old-worker',new Date().toISOString());
+ const response=await internal(id);assert.equal(response.status,409);assert.equal((await response.json()).reason,'manual_routing_required');
+ assert.equal((await x.call('/domains')).status,200);
+});
+
+test('temporary persona IDs cannot generate addresses, even using a neutral prefix or renamed Aura',async t=>{
+ const x=world(t);x.env.DEMO_ORG_ID='org_demo_001';const calls=transport(t);
+ const {generateAddress,proposeAddress,retryProvisioning}=await import('../worker/address.ts');
+ for(const id of ['aura_demo_001','aura_demo_002','aura_demo_003','aura_demo_004','aura_demo_merlin']){
+  x.sql.prepare('INSERT INTO auras(id,org_id,name) VALUES (?,?,?)').run(id,'org_demo_001','Renamed');
+  await assert.rejects(generateAddress(new Request('https://inbox.example',{method:'POST',body:JSON.stringify({local_part:'neutral-prefix'})}),x.env,{id,name:'Renamed'}),{status:409});
+  await assert.rejects(proposeAddress(x.env,{id,name:'Renamed'}),{status:409});
+ }
+ assert.equal(x.sql.prepare("SELECT count(*) n FROM email_address_assignments WHERE org_id='org_demo_001'").get().n,0);assert.equal(calls.length,0);
+});
+
+test('internal persona rejection is caught as 409 and leaves the coordinator usable',async t=>{
+ const x=world(t);x.env.DEMO_ORG_ID='org_demo_001';x.env.ADDRESS_PROVISIONING_SECRET='bridge-secret';
+ x.sql.exec("INSERT INTO auras(id,org_id,name) VALUES ('aura_demo_003','org_demo_001','Renamed'); INSERT INTO email_domains(id,org_id,domain,domain_key,kind,status,verified_at,activated_at) VALUES ('persona_domain','org_demo_001','persona.example.com','persona.example.com','custom','active','2026-11-01T00:00:00.000Z','2026-11-01T00:00:00.000Z'); INSERT INTO email_addresses(id,org_id,domain_id,local_part,address,address_key) VALUES ('persona_address','org_demo_001','persona_domain','neutral','neutral@persona.example.com','neutral@persona.example.com'); INSERT INTO email_address_assignments(id,org_id,address_id,aura_id,assigned_at) VALUES ('persona_assignment','org_demo_001','persona_address','aura_demo_003','2026-11-01T00:00:00.000Z'); INSERT INTO email_address_provisioning(org_id,address_id,status,worker_name,updated_at) VALUES ('org_demo_001','persona_address','provisioning_pending','old-worker','2026-11-01T00:00:00.000Z');");
+ const request=id=>worker.fetch(new Request('https://inbox.example/internal/provision-address',{method:'POST',headers:{Authorization:'Bearer bridge-secret','Content-Type':'application/json'},body:JSON.stringify({aura_id:id})}),x.env);
+ const response=await request('aura_demo_003');assert.equal(response.status,409);assert.match((await response.json()).error,/client-provided configuration/);assert.equal((await request('unknown')).status,404);
+});
