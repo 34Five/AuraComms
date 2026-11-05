@@ -84,6 +84,35 @@ button:focus-visible, a:focus-visible, select:focus-visible, summary:focus-visib
   outline-offset: 2px;
 }
 
+/* Single-choice selects share one arrow and reserve its space at every size.
+   Keep the native select for keyboard, screen-reader and mobile picker support.
+   Specificity prevents component background/padding shorthands resetting these. */
+select:not([multiple]):not([size]) {
+  -webkit-appearance: none;
+  appearance: none;
+  min-height: 44px;
+  padding-inline-end: 44px;
+  background-image: url('/icons/chevron-down.svg');
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 20px 20px;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+select:not([multiple]):not([size]):enabled:hover { border-color: var(--ink-muted); }
+select:not([multiple]):not([size]):focus-visible { border-color: var(--accent); }
+select:not([multiple]):not([size]):disabled { color: var(--ink-muted); cursor: not-allowed; opacity: .65; }
+
+/* Let the OS draw an accessible indicator in Windows high-contrast mode. */
+@media (forced-colors: active) {
+  select:not([multiple]):not([size]) {
+    -webkit-appearance: auto;
+    appearance: auto;
+    background-image: none;
+    padding-inline-end: 12px;
+  }
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
