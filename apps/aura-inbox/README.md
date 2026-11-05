@@ -159,7 +159,7 @@ An Aura with no address shows **Generate email** on its card. The button propose
 | `POST /api/auras/:id/address` | Creates the address. With several active domains, send `domain_id`. With none, returns 409 |
 | `POST /api/auras/:id/address/provision` | Retries the routing rule |
 
-POST requests must be JSON, which stops other sites posting from a browser. Any invited person can generate an address for any Aura in the demo org and create its routing rule. Each Aura gets one address, routed only to the demo Worker.
+POST requests must be JSON, which stops other sites posting from a browser. Any invited person can generate an address for any Aura in the demo org and create its routing rule. Each Aura gets one address. With delegation, its incoming mail routes to the configured Studio provisioning Worker and follows that Worker’s governance policy. The direct fallback uses `DEMO_WORKER_NAME` (default `aura-inbox-demo`).
 
 Provisioning state lives in `email_address_provisioning`:
 
@@ -172,7 +172,7 @@ A failure never blocks the address. Retry finishes it once the cause is fixed.
 Apply the migration before deploying, because `/api/auras` reads the new table. It only adds a table, and earlier deployed code ignores it.
 
 ```sh
-npx wrangler d1 execute DB --remote --file ../../scripts/0003_email_address_provisioning.sql
+npx wrangler d1 execute DB --remote --file ../../scripts/0005_email_address_provisioning.sql
 ```
 
 To let the Worker create rules, set a token limited to Email Routing Rules on the zone, and the zone ID. A domain row's `cloudflare_zone_id` takes priority over `CF_ZONE_ID`. `DEMO_WORKER_NAME` sets the target Worker and defaults to `aura-inbox-demo`.
@@ -184,12 +184,12 @@ npx wrangler secret put CF_ZONE_ID --env demo
 
 ## Thursday demo runbook
 
-Run this after the AXI-23 PR that adds the `demo` environment has merged. Until then `--env demo` fails. Run everything from `apps/aura-inbox` on an up-to-date `spikes/cf-email`, after `npm ci`.
+Run from `apps/aura-inbox` in this inbox checkout after `npm ci`. The governed Studio server from PR #15 must be deployed first, with its Cloudflare credentials and the same shared D1/R2. The client service binding alone does not install that server into `spikes/cf-email`. Confirm the existing Studio authentication protects its APIs; do not deploy this inbox's default config over it.
 
 **1. Add the provisioning table.** Do this before deploying, or `/api/auras` returns 500 on the new code.
 
 ```sh
-npx wrangler d1 execute DB --remote --file ../../scripts/0003_email_address_provisioning.sql
+npx wrangler d1 execute DB --remote --file ../../scripts/0005_email_address_provisioning.sql
 ```
 
 **2. Add the Atlas Aura, then check it.** The check must return one row. No row means a guard stopped the insert: the domain is not active, another Aura has the name, or the address is taken.
@@ -208,35 +208,34 @@ openssl rand -hex 32 | npx wrangler secret put SESSION_SECRET --env demo
 npm run build && npx wrangler deploy --env demo
 ```
 
-**Turn off public access to the old Worker.** In the dashboard, open Workers → `aura-inbox-test` → Settings → Domains & Routes and disable the workers.dev route. Without this, the demo mail stays readable there with no login. Then check that this returns no data:
+**Check Studio access protection.** The separate Studio replica now has its own sign-in. An anonymous request to its inbox API must return 401 without mail data. Preserve its configured authentication, bindings and UI access; do not overwrite it with this inbox checkout. The shared-password/auth integration blockers are tracked in PR #15.
 
 ```sh
 curl -i https://aura-inbox-test.cassius-kellogg.workers.dev/api/auras
 ```
 
-**4. Set the secrets, if the token is ready.** Each command prompts for the value. The zone ID for `34five.studio` is `1c60311626bbfe94b6fe3496d15de727`. Skip this step to demo the pending state.
+**4. Confirm the provisioning bridge.** `env.demo.services` binds `ADDRESS_PROVISIONER` to the Studio Worker. Set `ADDRESS_PROVISIONER_WORKER` to that same Worker name (`aura-inbox-test` in this demo) for pending-state instructions. Both Workers must have the same dedicated `ADDRESS_PROVISIONING_SECRET`. Preserve an existing matching pair. On first setup, generate one secret privately and enter that same value at both prompts:
 
 ```sh
-npx wrangler secret put CF_API_TOKEN --env demo
-npx wrangler secret put CF_ZONE_ID --env demo
+# From the Studio checkout:
+npx wrangler secret put ADDRESS_PROVISIONING_SECRET --name aura-inbox-test
+# From this inbox checkout:
+npx wrangler secret put ADDRESS_PROVISIONING_SECRET --env demo
 ```
 
-**5. Generate the address.** If the chip shows Failed with 'Already routed by another Cloudflare rule', pick a different Aura; do not change the existing rule. Open the demo URL and sign in with an invited address. On Atlas's card, choose **Generate email**, check that it proposes `atlas@34five.studio`, then choose **Create address**.
+The Studio Worker, rather than the inbox, owns `CLOUDFLARE_DOMAIN_API_TOKEN` and the zone settings. It must have access to the chosen active company domain. Deploy the server before the client; then deploy the inbox with `--env demo`. Do not change unrelated routing rules or catch-all.
 
-- With the secrets, the chip shows **Active** and the rule exists. Skip step 6.
-- Without them, the chip shows **Provisioning pending** with the rule to create.
-- **Failed** shows the reason. Fix the cause and choose **Retry**.
+**5. Generate the address and confirm the sending policy.** Sign into the inbox with an invited address. For the Atlas Aura added in step 2, select **Generate email**. When available, the suggestion is `atlas-2@34five.studio`: `atlas` is reserved, and existing reservations may require a higher suffix. Accept or edit a permitted, unused prefix, choose the active company domain, and select **Create address**. Record the actual address shown. The Studio replica also offers generation from Aura configuration.
 
-**6. Without the secrets, create the rule by hand.** Do this after step 5, because mail to an address the database does not know is rejected. List the rules first and stop if one already matches this address.
+In Studio, confirm this Aura has a sending policy and an active designated reviewer. Configure Tier 1 for a review-and-send demonstration, or Tier 4 for automatic replies. Do not change another Aura's policy for this test. The separate `aura_demo_atlas` fixture has no hand-written persona; the five temporary persona IDs are blocked from new provisioning by the Studio server.
 
-```sh
-npx wrangler email routing rules list 34five.studio
-npx wrangler email routing rules create 34five.studio --name "AuraComms atlas@34five.studio" --match-type literal --match-field to --match-value atlas@34five.studio --action-type worker --action-value aura-inbox-demo
-```
+**6. Wait for Active.** The inbox delegates routing to the configured Studio Worker, `aura-inbox-test` in this demo. Success requires the shared D1 provisioning row to become active, not just a 2xx response. The generated literal rule targets that governed Worker; the inbox remains a view of the same assignments and messages.
 
-The chip stays on **Provisioning pending** because the Worker cannot see this rule. Mail still flows. If the secrets are set later, **Retry** finds the rule and the chip shows **Active**.
+If pending or failed, check the shared secret, service binding, server deployment, provider credentials and domain readiness, then select **Retry**. A conflicting manual rule must not be overwritten. Existing pending reserved/legacy addresses require an administrator to reconcile routing manually; their address is preserved. Existing active addresses are returned unchanged without contacting Cloudflare. A test is not ready until its route is active.
 
-**7. Send a real test email to `atlas@34five.studio`.** It should appear in Atlas's inbox within five seconds, and a reply should come back from that address. This needs the demo Worker in `llm` mode. Fixed mode does not reply from generated addresses. This is the first real test of a reply from a generated address. If the thread shows **Reply failed**, report that as a finding: inbound mail still counts as working.
+**7. Send a real test email to the actual generated address.** The incoming message should appear in the Aura's inbox after refresh. The Studio Worker generates the AI draft and enforces the Aura's governance tier. With Tier 1, sign into Studio as a designated reviewer, approve the draft, then select **Send email**; no immediate external reply is expected before those actions. Tier 4 permits automatic dispatch. Tier 2/3 follow their configured initial-review rules. Generated addresses opt into LLM replies even when the Studio Worker's predefined test routes stay in fixed mode. The inbox Worker's own `llm` setting does not control replies for mail routed to Studio.
+
+Confirm the reply reaches the external mailbox, then reply again to check threading. A received message alone proves inbound delivery, not outbound success. Report any generation or send failure separately.
 
 ## Verification on November 2, 2026
 
@@ -248,3 +247,15 @@ The chip stays on **Provisioning pending** because the Worker cannot see this ru
 - Live API checks returned populated seeded messages for each Aura and `404` for cross-Aura thread lookups.
 - Both real receiving addresses are active in D1 and have enabled Cloudflare rules. The spike-test, anthony, and catch-all rules retained their prior IDs and actions.
 - Live browser checks covered both inboxes and conversation loading. No external SMTP test message was sent during setup.
+
+## Studio provisioning bridge (PR #16)
+
+With the `env.demo.services` binding `ADDRESS_PROVISIONER` targeting `aura-inbox-test`, and a nonempty `ADDRESS_PROVISIONING_SECRET`, address generation/retries delegate to the Studio Worker's `/internal/provision-address` endpoint. Set the **same dedicated secret** on both Workers with Wrangler secret configuration; never commit it or give this client the Cloudflare domain token. `.dev.vars.example` documents the local secret name. Cross-Worker local testing needs the companion Studio Worker running and its service binding wired to that local instance.
+
+**Dependency:** the server is implemented in PR #15 on `feature/aura-demo-authentication`, not on `spikes/cf-email`. Deploy that server before enabling the service binding/secret in this client. Merging #16 alone does not bring the server implementation into `spikes/cf-email`. Until the base branches are reconciled, do not deploy the plain/default inbox config over the governed Studio Worker. Missing binding/secret retains the legacy direct provisioning path, which needs its own Cloudflare token and zone; the demo deployment uses delegation.
+
+The client allows 15 seconds, then records a retryable failure and logs only the event, HTTP status (or null), and Aura ID. A 2xx response alone is insufficient: the shared D1 row must be active. A failed call never downgrades an already active row. Pending instructions target `aura-inbox-test` when delegation is configured, and the configured direct Worker otherwise.
+
+`shared/email-prefix.ts` is the single policy module used by both apps. Reserved mailbox/service names are rejected before inserts even when absent from D1. User prefixes accept letters/digits with single dots or hyphens. A collision or an attempt to change an existing assignment returns 409. New suggestions skip reserved names (for example, the reserved Atlas name suggests `atlas-2`). Existing provisioned addresses are not renamed.
+
+Use the canonical `scripts/0005_email_address_provisioning.sql`; this replaces the previous `0003_email_address_provisioning.sql` filename. Existing databases can apply `0005` idempotently; there is no second provisioning table migration to apply. Keep the invite sign-in migration separate and never import local parent fixtures into shared D1.

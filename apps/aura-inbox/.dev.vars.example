@@ -1,3 +1,8 @@
 GEMINI_API_KEY=
 ANTHROPIC_API_KEY=
 SESSION_SECRET=
+
+# Same dedicated value as the Studio provisioning Worker; never a Cloudflare token.
+ADDRESS_PROVISIONING_SECRET=
+# Match the Worker targeted by ADDRESS_PROVISIONER in Wrangler services.
+ADDRESS_PROVISIONER_WORKER=aura-inbox-test

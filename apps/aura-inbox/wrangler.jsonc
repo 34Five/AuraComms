@@ -27,10 +27,12 @@
   "env": {
     "demo": {
       "name": "aura-inbox-demo",
+      "services": [{"binding":"ADDRESS_PROVISIONER","service":"aura-inbox-test"}],
       "workers_dev": false,
       "routes": [{ "pattern": "inbox-demo.34five.studio", "custom_domain": true }],
       "vars": {
         "DEMO_ORG_ID": "org_demo_001", "TEST_MODE": "true", "AUTO_REPLY_ENABLED": "true",
+        "ADDRESS_PROVISIONER_WORKER": "aura-inbox-test",
         "AUTO_REPLY_MODE": "llm", "DEFAULT_LLM_MODEL": "gemini:gemini-3.5-flash-lite",
         "LLM_SENDER_HOURLY_CAP": "10", "LLM_AURA_DAILY_CAP": "200"
       },

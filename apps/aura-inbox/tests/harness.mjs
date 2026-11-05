@@ -11,7 +11,7 @@ export function setup(t) {
   const sql = new DatabaseSync(':memory:');
   t.after(() => sql.close());
   sql.exec('PRAGMA foreign_keys=ON;');
-  for (const path of ['tests/email/fixtures/studio_parents_2026_10_22.sql','scripts/0001_email_model.sql','scripts/email/seed.sql','scripts/0003_email_address_provisioning.sql','scripts/0004_demo_auth.sql']) {
+  for (const path of ['tests/email/fixtures/studio_parents_2026_10_22.sql','scripts/0001_email_model.sql','scripts/email/seed.sql','scripts/0005_email_address_provisioning.sql','scripts/0004_demo_auth.sql']) {
     sql.exec(readFileSync(new URL('../../../'+path,import.meta.url),'utf8'));
   }
   sql.exec("INSERT INTO auras (id,org_id,name) VALUES ('other_aura','other_org','Other organization');");
