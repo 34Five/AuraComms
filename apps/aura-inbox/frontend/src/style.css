@@ -628,3 +628,21 @@ select:not([multiple]):not([size]):disabled { color: var(--ink-muted); cursor: n
 
 .reply-unconfirmed { margin-top: var(--space-3); padding: var(--space-3) var(--space-4); border-radius: var(--radius-tile); background: var(--badge-clay-bg); color: var(--badge-clay-ink); font-size: var(--text-sm); line-height: 1.6; }
 .reply-unconfirmed strong { font-weight: 600; }
+
+.inline-review { border-top: 1px solid var(--rule); margin-top: var(--space-5); padding-top: var(--space-4); overflow-wrap: anywhere; }
+.inline-review h3 { font-size: var(--text-md); }
+.inline-review h3:focus { outline: 2px solid var(--accent); outline-offset: 4px; }
+.inline-review p { font-size: var(--text-sm); line-height: 1.6; margin-top: var(--space-2); }
+.inline-review .review-metadata,.inline-review .review-help { color: var(--ink-muted); font-size: var(--text-xs); }
+.inline-draft-editor label { display: grid; gap: var(--space-2); margin: var(--space-4) 0; font-size: var(--text-sm); }
+.inline-draft-editor input,.inline-draft-editor textarea { width: 100%; min-width: 0; padding: 10px 12px; border: 1px solid var(--rule); border-radius: var(--radius-control); background: var(--surface-paper); font: inherit; }
+.inline-draft-editor textarea { resize: vertical; min-height: 180px; max-height: 65vh; }
+.inline-review button:focus-visible,.inline-draft-editor input:focus-visible,.inline-draft-editor textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.inline-review button { min-height: 40px; max-width: 100%; white-space: normal; }
+.cancel-confirmation { padding: var(--space-3); border: 1px solid var(--rule); border-radius: var(--radius-control); }
+@media(max-width:560px) { .message-heading { flex-wrap:wrap; } .message-heading time { margin-left:auto; } .inline-review .review-actions { gap:var(--space-2); } }
+
+.draft-body-scroll { max-height: 360px; overflow: auto; padding-right: var(--space-2); }
+.draft-body-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+.message-subject { font-size: var(--text-sm); margin-bottom: var(--space-3); overflow-wrap: anywhere; }

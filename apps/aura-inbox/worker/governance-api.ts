@@ -60,6 +60,7 @@ export async function governanceApi(request: Request, env: Env, aura: string, pa
     if (section === 'reviews' && action === 'send') return json(await g.dispatch(aura,id));
     if (section === 'messages' && action === 'cancel') {
       const m = await g.message(aura,id);
+      await g.checkDraftVersion(m,request.body ? (await body(request)).expected_version : undefined);
       if (!['draft','queued','failed'].includes(m.status)) throw new HttpError(409,'Only unsent drafts can be cancelled. A send in progress must be reconciled.');
       await env.DB.batch([
         g.q("UPDATE email_messages SET status='cancelled' WHERE org_id=? AND aura_id=? AND id=?",g.org,aura,id),
@@ -69,6 +70,7 @@ export async function governanceApi(request: Request, env: Env, aura: string, pa
     }
     if (section === 'messages' && action === 'edit') {
       const data = await body(request), m = await g.message(aura,id);
+      await g.checkDraftVersion(m,data.expected_version);
       if (!['draft','queued'].includes(m.status) || m.body_storage !== 'inline') throw new HttpError(409,'Only inline unsent drafts can be edited here.');
       if (typeof data.subject !== 'string' || !data.subject.trim() || data.subject.length > 200 || /[\x00-\x1f\x7f]/.test(data.subject)
         || typeof data.text !== 'string' || !data.text.trim() || new TextEncoder().encode(data.text).byteLength > 12000) throw new HttpError(400,'Enter a subject and message text (at most 12 KB).');
@@ -78,7 +80,10 @@ export async function governanceApi(request: Request, env: Env, aura: string, pa
       ]);
       return json({review:await g.evaluate(aura,id)});
     }
-    if (section === 'messages' && action === 'evaluate') return json({review:await g.evaluate(aura,id)});
+    if (section === 'messages' && action === 'evaluate') {
+      await g.checkDraftVersion(await g.message(aura,id),request.body ? (await body(request)).expected_version : undefined);
+      return json({review:await g.evaluate(aura,id)});
+    }
     if (section === 'threads' && action === 'reset') return json(await g.reset(aura,id,member));
   }
   return null;

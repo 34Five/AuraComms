@@ -372,3 +372,24 @@ Routing calls share a 12-second total deadline (5 seconds per request), below th
 The default remains `AUTO_REPLY_MODE=fixed` for existing predefined routes. Generated assignments with a provisioning row use LLM replies and the selected governance tier even in fixed mode. This PR does not enable LLM calls for every existing address. An explicit deployment-wide `llm` setting still applies to all eligible routes.
 
 The hand-written persona code, shared-password login, competing authentication migrations/cookies, and identity-rename migration come from the base branch and are **unresolved merge blockers** for integration into `spikes/cf-email`. Keep the two existing Workers/configurations separate until governance and roles are integrated with the invite-only sign-in. Do not run `migrate-persona-emails.mjs` against shared D1 as part of this fix.
+
+## Inline draft review (AXI-18 first slice)
+
+The inbox draft card exposes approve, reject and a separate **Send email** action to designated reviewers. Designated Admins and Managers can also edit subject/text, cancel a draft and reevaluate its sending policy. Recipient and attachment editing remain outside this slice. Reevaluate policy does not generate an AI reply.
+
+The message response includes the latest review revision and server-derived permissions. Inline edit, cancellation and policy reevaluation carry a draft version that covers content, review status, policy version and thread review epoch. A stale version returns 409. Existing Governance clients can omit this optional version; the review-ID and content/policy freshness checks still apply to every approval and send. Editing supersedes the previous decision; held drafts need approval again and then an explicit Send. Edited-before-send stays set through later policy reevaluations.
+
+The card refreshes after successful and failed actions. If refreshing fails, actions stay disabled until the user refreshes the card successfully. Unknown send outcomes have no retry action. Provider acceptance does not prove recipient delivery. The existing server claim and organization coordinator prevent duplicate dispatches. The existing inline-body/12 KB edit limit remains; R2-backed bodies can be loaded for review but are not editable here.
+
+Local browser verification uses an in-memory database and replaces the email transport with a mock. It never calls an email provider:
+
+```sh
+npm run build
+# Install Playwright in a disposable directory, then point to its ESM entry point.
+npm install --prefix /tmp/axi18-browser --no-audit --no-fund playwright
+PLAYWRIGHT_MODULE=/tmp/axi18-browser/node_modules/playwright/index.mjs node tests/inline-review.browser.mjs
+```
+
+Install the matching Chromium with Playwright, or set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to an existing compatible executable. The script writes screenshots under `docs/verification/axi-18`; override with `SCREENSHOT_DIR`. It checks keyboard interaction, 390px width, long text, edits after approval, rejection/cancellation, stale editor preservation, refresh failure recovery, role restrictions and both failed and unconfirmed dispatch.
+
+Studio entry points, full review/history presentation and other AXI-18 acceptance criteria remain open. This slice requires no schema migration.

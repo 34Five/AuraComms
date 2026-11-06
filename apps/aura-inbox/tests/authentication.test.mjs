@@ -148,3 +148,85 @@ test('omitted or misspelled login configuration never restores public inbox acce
     assert.equal((await x.login()).status,200);
   }
 });
+
+async function inlineDraft(t) {
+  const x=await authDemo(t),cookie=x.cookieOf(await x.login());
+  const sent=[];
+  x.env.EMAIL={async send(value){sent.push(value);return {messageId:'<inline-review@example.invalid>'};}};
+  const base=`/api/auras/${AURA}`;
+  const response=await x.call(`${base}/governance/compose`,'POST',{to:'alex@example.invalid',subject:'Inline review',text:'Original draft'},cookie);
+  assert.equal(response.status,201);
+  const draft=await response.json();
+  const card=async()=>{
+    const response=await x.call(`${base}/threads/${draft.thread_id}/messages`,'GET',undefined,cookie);
+    assert.equal(response.status,200);
+    return (await response.json()).messages.find(m=>m.id===draft.message_id);
+  };
+  return {...x,cookie,base,draft,card,sent};
+}
+
+test('inline review metadata enforces designated reviewer permissions for each fixed role',async t=>{
+  const x=await inlineDraft(t),path=`${x.base}/threads/${x.draft.thread_id}/messages`;
+  for(let index=0;index<3;index++){
+    const cookie=x.cookieOf(await x.login(index));
+    const m=(await (await x.call(path,'GET',undefined,cookie)).json()).messages[0];
+    assert.deepEqual(m.review_permissions,{review:true,edit:index!==2});
+    assert.equal(m.review.id,x.draft.review.id);assert.ok(m.draft_version);
+    if(index===2){
+      for(const action of ['edit','cancel','evaluate'])assert.equal((await x.call(`${x.base}/messages/${m.id}/${action}`,'POST',{subject:'Forbidden',text:'Forbidden',expected_version:m.draft_version},cookie)).status,403);
+      assert.equal((await x.call(`${x.base}/reviews/${m.review.id}/decide`,'POST',{outcome:'approved',member_id:'spoofed'},cookie)).status,200);
+      assert.equal(x.sql.prepare('SELECT approver_member_id FROM email_reviews WHERE id=?').get(m.review.id).approver_member_id,'member_demo_reviewer');
+    }
+  }
+  const cookie=x.cookieOf(await x.login());
+  x.sql.exec("UPDATE email_aura_reviewers SET revoked_at='2026-11-06T00:00:00Z' WHERE member_id='member_demo_001'");
+  const m=(await (await x.call(path,'GET',undefined,cookie)).json()).messages[0];
+  assert.deepEqual(m.review_permissions,{review:false,edit:false});
+  assert.equal((await x.call(`${x.base}/reviews/${m.review.id}/send`,'POST',{},cookie)).status,403);
+  assert.equal(x.sent.length,0);
+});
+
+test('inline edit supersedes approval, rejects stale actions and requires approve then explicit send',async t=>{
+  const x=await inlineDraft(t),m=await x.card();
+  assert.equal((await x.call(`${x.base}/reviews/${m.review.id}/decide`,'POST',{outcome:'approved'},x.cookie)).status,200);
+  const approved=await x.card();assert.notEqual(approved.draft_version,m.draft_version);
+  const edit=await x.call(`${x.base}/messages/${m.id}/edit`,'POST',{subject:'Revised subject',text:'Revised draft',expected_version:approved.draft_version},x.cookie);
+  assert.equal(edit.status,200);const next=await x.card();
+  assert.equal(next.review.status,'pending');assert.equal(next.review.edited_before_send,1);assert.equal(next.review.revision,2);
+  assert.equal(x.sql.prepare('SELECT status FROM email_reviews WHERE id=?').get(m.review.id).status,'superseded');
+  for(const action of ['send','decide'])assert.equal((await x.call(`${x.base}/reviews/${m.review.id}/${action}`,'POST',{outcome:'approved'},x.cookie)).status,409);
+  for(const action of ['edit','cancel','evaluate'])assert.equal((await x.call(`${x.base}/messages/${m.id}/${action}`,'POST',{subject:'Stale',text:'Stale',expected_version:approved.draft_version},x.cookie)).status,409);
+  assert.equal((await x.call(`${x.base}/reviews/${next.review.id}/send`,'POST',{},x.cookie)).status,409);
+  assert.equal((await x.call(`${x.base}/reviews/${next.review.id}/decide`,'POST',{outcome:'approved'},x.cookie)).status,200);
+  assert.equal(x.sent.length,0);
+  const reviewerCookie=x.cookieOf(await x.login(2));
+  const responses=await Promise.all([1,2,3].map(()=>x.call(`${x.base}/reviews/${next.review.id}/send`,'POST',{},reviewerCookie)));
+  assert.deepEqual((await Promise.all(responses.map(r=>r.json()))).map(r=>r.status).sort(),['already_sent','already_sent','sent']);
+  assert.equal(x.sent.length,1);assert.equal(x.sent[0].text,'Revised draft');
+  assert.equal((await x.card()).status,'sent');
+  assert.deepEqual(x.sql.prepare('PRAGMA foreign_key_check').all(),[]);
+});
+
+test('inline rejection, policy reevaluation and cancellation preserve review history and never send',async t=>{
+  const x=await inlineDraft(t),m=await x.card();
+  assert.equal((await x.call(`${x.base}/reviews/${m.review.id}/decide`,'POST',{outcome:'rejected'},x.cookie)).status,200);
+  let latest=await x.card();
+  assert.equal((await x.call(`${x.base}/messages/${m.id}/evaluate`,'POST',{expected_version:latest.draft_version},x.cookie)).status,200);
+  latest=await x.card();assert.equal(latest.review.status,'rejected');
+  assert.equal((await x.call(`${x.base}/messages/${m.id}/cancel`,'POST',{expected_version:latest.draft_version},x.cookie)).status,200);
+  assert.equal((await x.card()).status,'cancelled');assert.equal((await x.card()).draft_version,null);
+  assert.equal(x.sql.prepare('SELECT status FROM email_reviews WHERE id=?').get(m.review.id).status,'rejected');
+  assert.equal(x.sent.length,0);
+});
+
+test('inline send timeout retains claim, exposes unconfirmed outcome and rejects every retry',async t=>{
+  const x=await inlineDraft(t),m=await x.card();let calls=0;
+  x.env.EMAIL={async send(){calls++;throw Error('timeout');}};
+  await x.call(`${x.base}/reviews/${m.review.id}/decide`,'POST',{outcome:'approved'},x.cookie);
+  const response=await x.call(`${x.base}/reviews/${m.review.id}/send`,'POST',{},x.cookie);
+  assert.equal((await response.json()).status,'unknown');
+  const latest=await x.card();assert.equal(latest.status,'sending');assert.equal(latest.display_state,'send_unknown');assert.equal(latest.draft_version,null);
+  for(const action of ['send','decide'])assert.equal((await x.call(`${x.base}/reviews/${m.review.id}/${action}`,'POST',{outcome:'approved'},x.cookie)).status,409);
+  for(const action of ['edit','cancel','evaluate'])assert.equal((await x.call(`${x.base}/messages/${m.id}/${action}`,'POST',{subject:'Retry',text:'Retry'},x.cookie)).status,409);
+  assert.equal(calls,1);
+});

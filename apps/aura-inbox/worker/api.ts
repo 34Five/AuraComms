@@ -2,6 +2,7 @@ import { sendFailureSummary } from './generated-sender.ts';
 import { authenticationApi, sessionIdentity } from './session-auth.ts';
 import type { Env } from './types.ts';
 import { managementApi } from './management-api.ts';
+import { Governance } from './governance.ts';
 import { governanceApi } from './governance-api.ts';
 import { HttpError } from './types.ts';
 import { cursor, encodeCursor, json, pageSize, requireId } from './utils.ts';
@@ -143,14 +144,28 @@ export async function api(request: Request, env: Env): Promise<Response> {
       ]);
       recipients = r.results; attachments = a.results; failures = f.results; sends=s.results;
     }
+    const g = new Governance(env);
+    // Read current revisions per message, independent of the management history limit.
+    const reviews = ids.length ? (await env.DB.prepare(`SELECT r.id,r.message_id,r.status,r.revision,r.tier_applied,r.reason,r.decision_source,r.edited_before_send,r.approver_member_id,r.requested_at,r.decided_at
+      FROM email_reviews r WHERE r.org_id=? AND r.aura_id=? AND r.message_id IN (${ids.map(()=>'?').join(',')})
+      AND r.revision=(SELECT MAX(x.revision) FROM email_reviews x WHERE x.org_id=r.org_id AND x.aura_id=r.aura_id AND x.message_id=r.message_id)`)
+      .bind(org,auraId,...ids).all<Row>()).results : [];
+    let canReview = false;
+    if (identity) {
+      try { await g.reviewer(auraId,identity.member_id); canReview = true; }
+      catch (error) { if (!(error instanceof HttpError) || error.status !== 403) throw error; }
+    }
     const now = Date.now();
-    return json({ thread, messages: rows.reverse().map(row => ({ ...row,
+    return json({ thread, messages: await Promise.all(rows.reverse().map(async row => ({ ...row,
+      review: reviews.find(r=>r.message_id===row.id) ?? null,
+      review_permissions: {review:canReview,edit:canReview && identity?.role!=='reviewer'},
+      draft_version: row.direction==='out' && ['draft','queued'].includes(row.status) ? await g.draftVersion(await message(env,auraId,row.id)) : null,
       recipients: recipients.filter(r => r.message_id === row.id),
       attachments: attachments.filter(a => a.message_id === row.id),
       failure: replyFailure(failures.find(f => f.message_id === row.id)),
       send_failure: sendFailure(sends.find(s=>s.message_id===row.id)),
       display_state: displayState(row, now,sends.find(s=>s.message_id===row.id)),
-    })), nextCursor: results.length > limit && last ? encodeCursor(last.activity_at,last.id) : null });
+    }))), nextCursor: results.length > limit && last ? encodeCursor(last.activity_at,last.id) : null });
   }
   if (parts[3] === 'messages' && parts[4]) {
     const msg = await message(env, auraId, parts[4]);

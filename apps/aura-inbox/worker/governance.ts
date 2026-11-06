@@ -110,6 +110,17 @@ export class Governance {
     return sent ? null : 'tier_2_first_outbound';
   }
   review(aura: string, id: string) { return this.one('SELECT * FROM email_reviews WHERE org_id=? AND aura_id=? AND id=?',this.org,aura,id); }
+  async draftVersion(m: Row) {
+    const latest = await this.q('SELECT id,status FROM email_reviews WHERE org_id=? AND aura_id=? AND message_id=? ORDER BY revision DESC LIMIT 1',this.org,m.aura_id,m.id).first<Row>();
+    const thread = await this.thread(m), policy = await this.policyConfig(m.aura_id);
+    return `${await this.fingerprint(m)}:${latest?.id ?? ''}:${latest?.status ?? ''}:${thread.review_epoch}:${policy.version}`;
+  }
+  async checkDraftVersion(m: Row, expected: unknown) {
+    // Legacy Governance clients omit the token. Inline controls always supply it.
+    if (expected !== undefined && (typeof expected !== 'string' || expected !== await this.draftVersion(m))) {
+      throw new HttpError(409,'This draft changed. Refresh and review the latest version before acting.');
+    }
+  }
   async evaluate(aura: string, id: string) {
     const m = await this.message(aura,id);
     if (!['draft','queued'].includes(m.status)) throw new HttpError(409,'Only unsent drafts can be evaluated.');
@@ -134,7 +145,7 @@ export class Governance {
       this.q("UPDATE email_reviews SET status='superseded' WHERE org_id=? AND aura_id=? AND message_id=? AND status IN ('pending','approved','rejected')",this.org,aura,id),
       this.q(`INSERT INTO email_reviews (id,org_id,aura_id,message_id,revision,tier_applied,thread_review_epoch,status,decision_source,
         policy_snapshot_json,reviewed_content_sha256,reason,requested_at,decided_at,edited_before_send) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        review,this.org,aura,id,(latest?.revision ?? 0)+1,p.tier,t.review_epoch,status,reason?'human':'automatic',snapshot,digest,reason??'tier_automatic',now,reason?null:now,latest && latest.reviewed_content_sha256 !== digest ? 1:0),
+        review,this.org,aura,id,(latest?.revision ?? 0)+1,p.tier,t.review_epoch,status,reason?'human':'automatic',snapshot,digest,reason??'tier_automatic',now,reason?null:now,latest && (latest.edited_before_send || latest.reviewed_content_sha256 !== digest) ? 1:0),
       this.q('UPDATE email_threads SET current_tier=?,tier_state=?,state_version=state_version+1 WHERE org_id=? AND aura_id=? AND id=?',p.tier,status,this.org,aura,m.thread_id),
     ]);
     return this.review(aura,review);
