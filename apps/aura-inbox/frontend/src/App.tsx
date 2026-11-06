@@ -64,7 +64,7 @@ function MessageBody({ text, draft=false }: { text: string; draft?:boolean }) {
     : <div className="reply-text" key={index}>{part.text}</div>)}</div>;
 }
 
-function MessageCard({ message: m, auraId, onRefresh }: { message: Message; auraId: string; onRefresh:()=>Promise<void> }) {
+function MessageCard({ message: m, auraId, onRefresh }: { message: Message; auraId: string; onRefresh:()=>Promise<Message[]|undefined> }) {
   const [body,setBody] = useState<{ body_text: string | null; body_html: string | null } | null>(null);
   const [error,setError] = useState('');
   const [loading,setLoading] = useState(false);
@@ -92,7 +92,7 @@ function MessageCard({ message: m, auraId, onRefresh }: { message: Message; aura
       : <MessageBody text={plain(body?.body_text ?? m.body_text,body?.body_html ?? m.body_html)} draft={m.direction==='out'&&m.status!=='sent'}/>)}
     {error && <p className="inline-error" role="alert">{error}</p>}
     {m.attachments.length > 0 && <div className="attachments">{m.attachments.map(a => <a key={a.id} href={`/api/auras/${auraId}/messages/${m.id}/attachments/${a.id}`} className="attachment"><Icon name="attachment" size={16}/><span>{a.filename || 'Attachment'}<small>{Math.max(1,Math.round(a.size_bytes/1024))} KB</small></span></a>)}</div>}
-    <DraftReview message={m} auraId={auraId} onRefresh={onRefresh}/>
+    <DraftReview message={m} auraId={auraId} onRefresh={async()=> (await onRefresh())?.find(message=>message.id===m.id)}/>
     {state === 'normal' && <div className="message-status">{(m.direction==='in'||m.status==='sent')&&<Icon name="check" size={13}/>} {m.direction === 'in' ? 'Received' : m.status}</div>}
   </article>;
 }
@@ -216,10 +216,13 @@ export function App({navigate,user,onLogout,logoutBusy}: {navigate:(path:string)
       if(generation!==messageGeneration.current||read!==messageReads.current)return;
       pages.push(older);cursor=older.nextCursor;
     }
-    setMessages(pages.flatMap(p=>p.messages).sort((a,b)=>a.activity_at.localeCompare(b.activity_at)||a.id.localeCompare(b.id)));
+    const refreshed=pages.flatMap(p=>p.messages).sort((a,b)=>a.activity_at.localeCompare(b.activity_at)||a.id.localeCompare(b.id));
+    setMessages(refreshed);
     setMessageCursor(cursor);
     const data=await get<{auras:Aura[]}>('/api/auras');
-    if(generation===messageGeneration.current)setAuras(data.auras);
+    if(generation!==messageGeneration.current)return;
+    setAuras(data.auras);
+    return refreshed;
   };
   const moreMessages = async () => {
     const generation = messageGeneration.current;

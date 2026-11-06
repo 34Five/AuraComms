@@ -15,7 +15,7 @@ Verified locally on November 6, 2026. All data is disposable; every provider cal
 
 - `npm run check`: TypeScript, all 305 app tests, production build and Wrangler deployment dry run. The sandbox blocked Wrangler's normal log path; the dry run passed again with `WRANGLER_LOG_PATH=/tmp/axi18-wrangler-logs`.
 - `python3 -m unittest discover -s tests/email -v`: all 79 schema/lifecycle/reference-rule tests passed.
-- Browser fixture: `apps/aura-inbox/tests/inline-review.browser.mjs`; real app/API, SQLite with foreign keys, mocked email transport. Three mocked dispatches: accepted, unknown, rejected.
+- Browser fixture: `apps/aura-inbox/tests/inline-review.browser.mjs`; real app/API, SQLite with foreign keys, mocked email transport. Four mocked dispatches: accepted, unknown, rejected, and accepted after pre-dispatch recovery.
 - API tests: fixed-role authorization, designated reviewer revocation, edit/approval invalidation, stale approvals/edits/cancel/reevaluation, separate approval and Send, concurrent duplicate Send, unknown claim preservation, rejection/cancellation history, and edited flag persistence through policy reevaluation.
 - Browser checks: keyboard approval/Send, focus restoration, long text, 390px width without horizontal overflow, edit-after-approval, stale editor text preservation, Reviewer controls, failed/unconfirmed distinction and refresh-error recovery.
 
@@ -41,3 +41,14 @@ Visual checks retain the existing inbox layout, typography, colors and control s
 AXI-18 stays open. Studio entry points, broader audit/history presentation, the full filter/access acceptance criteria and analytics are not completed by this slice. Reply-all (AXI-30), recipient editing (AXI-31), address availability (AXI-32), and AI regeneration are excluded.
 
 Existing edit limits remain: inline text bodies only, subject up to 200 characters and text up to 12 KB. R2 bodies remain readable and reviewable. Unknown sends require administrator/provider reconciliation; no retry is introduced. External receipt/delivery is unverified; Akash sends real test emails.
+
+## CTO review follow-up
+
+Both P2 findings from the review of `74f1fc1` are addressed:
+
+- Cancellation captures the draft version when confirmation opens. A subsequent content, approval or policy change disables confirmation and asks the reviewer to keep the draft, review it again and reopen cancellation. The captured token also protects the request if it races a change before polling.
+- Send locks the attempted draft version. A rejected HTTP request clears that lock only after an authoritative refresh returns an approved unsent draft. Network failures and unknown provider outcomes keep the attempted version locked; a newly edited and approved revision is independent of the old attempt.
+
+Regressions run against the real local API and an in-memory database: concurrent edit during cancellation, server rejection of the old cancellation token, explicit reconfirmation, a real pre-dispatch 503 from a missing sender binding, delayed authoritative refresh, edit/reapproval/send recovery, and an unknown send with a deliberately stale approved refresh. Four mocked provider calls; no real email.
+
+All 305 app tests, 79 Python tests, TypeScript, build, dry run and the expanded browser suite pass. Updated evidence: [stale cancellation](review-stale-cancellation.png) and [recovered Send after fresh approval](review-send-recovered.png).

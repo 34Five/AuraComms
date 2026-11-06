@@ -77,7 +77,14 @@ try{
   assert.equal(await page.getByRole('button',{name:'Edit draft',exact:true}).evaluate(el=>el===document.activeElement),true);
   // Keyboard approval followed by a separate keyboard Send action.
   await page.getByRole('button',{name:'Approve',exact:true}).focus();await page.keyboard.press('Enter');await page.getByRole('button',{name:'Send email',exact:true}).waitFor();assert.equal(sent.length,1);
-  outcome='unknown';await page.getByRole('button',{name:'Send email',exact:true}).focus();await page.keyboard.press('Enter');await page.getByText('Send outcome unconfirmed',{exact:true}).waitFor();
+  // Even a stale approved refresh must not reopen Send after an uncertain attempt.
+  const unknownRoute='**/api/auras/*/threads/*/messages?limit=25';
+  const approvedSnapshot=await (await page.request.get(`${origin}${base}/threads/${d.thread_id}/messages?limit=25`)).json();
+  await page.route(unknownRoute,route=>route.fulfill({json:approvedSnapshot}));
+  outcome='unknown';await page.getByRole('button',{name:'Send email',exact:true}).focus();await page.keyboard.press('Enter');
+  await page.getByText('Provider outcome is unknown. Do not retry this message.',{exact:true}).waitFor();
+  assert.equal(await page.getByRole('button',{name:'Send email',exact:true}).isDisabled(),true);
+  await page.unroute(unknownRoute);await page.getByText('Send outcome unconfirmed',{exact:true}).waitFor();
   assert.equal(await page.getByRole('button',{name:'Send email',exact:true}).count(),0);await page.getByText('Send outcome unconfirmed',{exact:true}).scrollIntoViewIfNeeded();await shot('mobile-unconfirmed');
   outcome='failed';await page.setViewportSize({width:1440,height:1000});d=await draft();
   await page.getByRole('button',{name:'Approve',exact:true}).click();await page.getByRole('button',{name:'Send email',exact:true}).click();await page.getByText('Email not sent',{exact:true}).waitFor();await shot('desktop-failed');
@@ -97,11 +104,42 @@ try{
   await api(`${base}/messages/${d.message_id}/edit`,{subject:'Concurrent edit',text:'Other reviewer update'});
   await page.getByText('This draft changed while you were editing.',{exact:false}).waitFor({timeout:10000});
   assert.equal(await page.getByLabel('Message',{exact:true}).inputValue(),'My unsaved changes');assert.equal(await page.getByRole('button',{name:'Save and reevaluate policy',exact:true}).isDisabled(),true);await shot('desktop-stale-edit');
+  // Confirmation must stay bound to the version the reviewer chose to cancel.
+  d=await draft();await page.getByRole('button',{name:'Cancel draft',exact:true}).click();
+  const beforeCancel=(await (await page.request.get(`${origin}${base}/threads/${d.thread_id}/messages?limit=25`)).json()).messages[0];
+  await api(`${base}/messages/${d.message_id}/edit`,{subject:'New revision while cancellation is open',text:'Keep this revised message'});
+  await page.getByText('This draft changed after you opened cancellation.',{exact:false}).waitFor();
+  assert.equal(await page.getByRole('button',{name:'Confirm cancellation',exact:true}).isDisabled(),true);
+  assert.equal(x.sql.prepare('SELECT status FROM email_messages WHERE id=?').get(d.message_id).status,'draft');
+  // A click arriving before the next poll is independently rejected by the server.
+  const staleCancel=await page.request.post(`${origin}${base}/messages/${d.message_id}/cancel`,{headers:{Origin:origin},data:{expected_version:beforeCancel.draft_version}});
+  assert.equal(staleCancel.status(),409);await shot('review-stale-cancellation');
+  await page.getByRole('button',{name:'Keep draft',exact:true}).click();
+  await page.getByRole('button',{name:'Cancel draft',exact:true}).click();await page.getByRole('button',{name:'Confirm cancellation',exact:true}).click();await page.getByRole('heading',{name:'Draft cancelled',exact:true}).waitFor();
+  // Real pre-dispatch 503: missing binding, not a provider timeout. Delay the
+  // authoritative refresh to verify that the attempted version stays locked.
+  d=await draft();await page.getByRole('button',{name:'Approve',exact:true}).click();await page.getByRole('button',{name:'Send email',exact:true}).waitFor();
+  const transport=x.env.EMAIL,beforeRecovery=sent.length;delete x.env.EMAIL;
+  let releaseRefresh;const refreshGate=new Promise(resolve=>{releaseRefresh=resolve;});
+  await page.route(refreshRoute,async route=>{await refreshGate;await route.continue();});
+  await page.getByRole('button',{name:'Send email',exact:true}).click();
+  await page.getByText('The email sender is not configured.',{exact:true}).waitFor();
+  assert.equal(await page.getByRole('button',{name:'Send email',exact:true}).isDisabled(),true);
+  releaseRefresh();await page.unroute(refreshRoute,{behavior:'wait'});
+  await page.waitForFunction(()=>[...document.querySelectorAll('button')].some(b=>b.textContent==='Send email'&&!b.disabled));
+  assert.equal(sent.length,beforeRecovery);assert.equal(x.sql.prepare('SELECT status FROM email_messages WHERE id=?').get(d.message_id).status,'draft');
+  await page.getByRole('button',{name:'Edit draft',exact:true}).click();await page.getByLabel('Message',{exact:true}).fill('Fresh approved revision after pre-dispatch 503');
+  await page.getByRole('button',{name:'Save and reevaluate policy',exact:true}).click();await page.getByRole('button',{name:'Approve',exact:true}).click();
+  await page.waitForFunction(()=>[...document.querySelectorAll('button')].some(b=>b.textContent==='Send email'&&!b.disabled));
+  x.env.EMAIL=transport;await shot('review-send-recovered');
+  await page.getByRole('button',{name:'Send email',exact:true}).click();await page.getByRole('heading',{name:'Sent to provider',exact:true}).waitFor();
+  assert.equal(sent.length,beforeRecovery+1);assert.equal(sent.at(-1).text,'Fresh approved revision after pre-dispatch 503');
+  d=await draft();
   await page.getByRole('button',{name:'Sign out',exact:true}).click();await login(2);
   await page.goto(`${origin}/?aura=${aura}&thread=${d.thread_id}`);await page.getByRole('button',{name:'Approve',exact:true}).waitFor();
   assert.equal(await page.getByRole('button',{name:'Edit draft',exact:true}).count(),0);assert.equal(await page.getByRole('button',{name:'Cancel draft',exact:true}).count(),0);await shot('reviewer-permissions');
   assert.deepEqual(errors,[]);
-  console.log(JSON.stringify({result:'passed',screenshots:shots,mockedProviderCalls:sent.length,checks:['edit invalidates approval','explicit Send','keyboard approval/send','narrow viewport','long editor','unknown send has no retry','failed send distinct','reject/cancel','stale editor preserves text','reviewer permissions','refresh failure disables actions until recovery']},null,2));
+  console.log(JSON.stringify({result:'passed',screenshots:shots,mockedProviderCalls:sent.length,checks:['edit invalidates approval','explicit Send','keyboard approval/send','narrow viewport','long editor','unknown send has no retry','failed send distinct','reject/cancel','stale editor preserves text','reviewer permissions','refresh failure disables actions until recovery','stale cancellation requires reconfirmation','pre-dispatch 503 recovers after authoritative refresh and fresh approval','uncertain send remains locked under stale approved refresh']},null,2));
 }catch(error){console.error('Browser check failed:',error);await shot('failure');throw error;}finally{
   await browser.close();await new Promise(r=>server.close(r));for(const fn of cleanup)fn();
 }
