@@ -1,3 +1,4 @@
+import { reviewHistory } from './review-history.ts';
 import { sendFailureSummary } from './generated-sender.ts';
 import { authenticationApi, sessionIdentity } from './session-auth.ts';
 import type { Env } from './types.ts';
@@ -169,6 +170,7 @@ export async function api(request: Request, env: Env): Promise<Response> {
   }
   if (parts[3] === 'messages' && parts[4]) {
     const msg = await message(env, auraId, parts[4]);
+    if (parts.length === 6 && parts[5] === 'reviews') return reviewHistory(env,auraId,msg.id,url);
     if (parts.length === 6 && parts[5] === 'body') {
       if (msg.body_storage === 'inline') return json({ body_text: msg.body_text, body_html: msg.body_html });
       const object = await env.MAIL.get(msg.body_r2_key);
