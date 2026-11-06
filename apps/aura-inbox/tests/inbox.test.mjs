@@ -311,6 +311,7 @@ test('edits and policy changes invalidate unsent approvals while preserving revi
   assert.equal((await x.call(a,`reviews/${d.review.id}/send`,'POST')).status,409);
   const p=await x.g.policy(a);await x.g.updatePolicy(a,'member_demo_001',{...p,rules:{daily_limit:1}});
   assert.equal((await x.g.review(a,r.id)).status,'superseded');assert.equal((await x.call(a,'governance/policy','PUT',{...p,rules:{}})).status,409);
+  assert.equal((await x.g.evaluate(a,d.message_id)).edited_before_send,1,'policy reevaluation retains the edited flag');
 });
 
 test('identical rejected content cannot become automatic and malformed guardrails fail closed',async t=>{

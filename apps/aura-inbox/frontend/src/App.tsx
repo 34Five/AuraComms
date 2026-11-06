@@ -1,3 +1,4 @@
+import { DraftReview, type ReviewMessage } from './DraftReview';
 import { workspaceFetch, type User } from './auth';
 import { TIER_LABELS } from './GovernancePanel';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -9,7 +10,7 @@ type Aura = { tier: string | null; pending_count: number; id: string; name: stri
   addresses: { address: string; status: string; domain_status: string }[] };
 type Thread = { id: string; subject: string | null; sender: string | null; preview: string | null;
   last_activity_at: string; message_count: number; inbox_status: string };
-type Message = { id: string; direction: string; status: string; from_address: string; from_name: string | null;
+type Message = ReviewMessage & { id: string; direction: string; status: string; from_address: string; from_name: string | null;
   subject: string | null; body_text: string | null; body_html: string | null; body_storage: string; activity_at: string;
   recipients: { kind: string; address: string; display_name: string | null }[];
   attachments: { id: string; filename: string; size_bytes: number }[];
@@ -56,14 +57,14 @@ function plain(text: string | null, html: string | null): string {
   return fragmentToText(fragment) || 'This message has no text content.';
 }
 
-function MessageBody({ text }: { text: string }) {
+function MessageBody({ text, draft=false }: { text: string; draft?:boolean }) {
   const parts = useMemo(() => splitQuotedText(text), [text]);
-  return <div className="message-body">{parts.map((part,index) => part.quoted
+  return <div className={`message-body ${draft?'draft-body-scroll':''}`} tabIndex={draft?0:undefined} role={draft?'region':undefined} aria-label={draft?'Draft message preview':undefined}>{parts.map((part,index) => part.quoted
     ? <details className="quoted-history" key={index}><summary><span className="quote-dots" aria-hidden="true">•••</span><span className="quote-show">Show quoted text</span><span className="quote-hide">Hide quoted text</span></summary><div className="quoted-content">{part.text}</div></details>
     : <div className="reply-text" key={index}>{part.text}</div>)}</div>;
 }
 
-function MessageCard({ message: m, auraId }: { message: Message; auraId: string }) {
+function MessageCard({ message: m, auraId, onRefresh }: { message: Message; auraId: string; onRefresh:()=>Promise<Message[]|undefined> }) {
   const [body,setBody] = useState<{ body_text: string | null; body_html: string | null } | null>(null);
   const [error,setError] = useState('');
   const [loading,setLoading] = useState(false);
@@ -81,15 +82,17 @@ function MessageCard({ message: m, auraId }: { message: Message; auraId: string 
     </div>
     <div className="recipient-line">To: {m.recipients.filter(r => r.kind === 'to').map(r => r.address).join(', ') || '—'}
       {m.recipients.some(r => r.kind === 'cc') && <span className="recipient-cc">Cc: {m.recipients.filter(r => r.kind === 'cc').map(r => r.address).join(', ')}</span>}</div>
+    {m.direction==='out' && <p className="message-subject"><strong>Subject:</strong> {m.subject||'(No subject)'}</p>}
     {state === 'failed' && <div className="reply-failed" role="alert"><strong>Reply failed</strong>{m.failure && <p>{m.failure.summary}</p>}<p>No email was sent.</p></div>}
     {state === 'timed_out' && <div className="reply-failed" role="alert"><strong>Reply timed out</strong><p>The reply did not finish generating, and no email was sent.</p></div>}
     {state==='send_unknown'&&<div className="reply-unconfirmed" role="status"><strong>Send outcome unconfirmed</strong><p>The send attempt ended without confirmation. Do not resend until an administrator checks the provider’s activity.</p></div>}
     {state==='send_failed'&&<div className="reply-failed" role="alert"><strong>Email not sent</strong><p>{m.send_failure?.summary||'The email provider rejected the send request.'}</p></div>}
     {state === 'generating' && <p className="reply-generating">Generating reply…</p>}
     {(state === 'normal' || state==='send_unknown' || state==='send_failed' || (state === 'failed' && hasBody)) && (m.body_storage === 'r2' && !body ? <button className="text-button" onClick={load} disabled={loading}>{loading ? 'Loading message…' : 'Load full message'}</button>
-      : <MessageBody text={plain(body?.body_text ?? m.body_text,body?.body_html ?? m.body_html)}/>)}
+      : <MessageBody text={plain(body?.body_text ?? m.body_text,body?.body_html ?? m.body_html)} draft={m.direction==='out'&&m.status!=='sent'}/>)}
     {error && <p className="inline-error" role="alert">{error}</p>}
     {m.attachments.length > 0 && <div className="attachments">{m.attachments.map(a => <a key={a.id} href={`/api/auras/${auraId}/messages/${m.id}/attachments/${a.id}`} className="attachment"><Icon name="attachment" size={16}/><span>{a.filename || 'Attachment'}<small>{Math.max(1,Math.round(a.size_bytes/1024))} KB</small></span></a>)}</div>}
+    <DraftReview message={m} auraId={auraId} onRefresh={async()=> (await onRefresh())?.find(message=>message.id===m.id)}/>
     {state === 'normal' && <div className="message-status">{(m.direction==='in'||m.status==='sent')&&<Icon name="check" size={13}/>} {m.direction === 'in' ? 'Received' : m.status}</div>}
   </article>;
 }
@@ -113,7 +116,7 @@ export function App({navigate,user,onLogout,logoutBusy}: {navigate:(path:string)
   const [moreBusy,setMoreBusy] = useState(false);
   const [refreshKey,setRefreshKey] = useState(0);
   const [synced,setSynced] = useState<Date | null>(null);
-  const listGeneration = useRef(0), messageGeneration = useRef(0);
+  const listGeneration = useRef(0), messageGeneration = useRef(0), messageReads = useRef(0);
   const aura = auras.find(a => a.id === auraId);
   const liveAddress = aura?.addresses.find(a => a.status === 'active' && a.domain_status === 'active')?.address;
   const inboxPath = useMemo(() => `/api/auras/${auraId}/inbox?limit=25&q=${encodeURIComponent(query)}${status ? `&status=${status}` : ''}`,[auraId,query,status]);
@@ -176,8 +179,9 @@ export function App({navigate,user,onLogout,logoutBusy}: {navigate:(path:string)
       if (busy || document.hidden) return;
       busy = true;
       try {
+        const read=++messageReads.current;
         const page = await get<MessagePage>(messagePath,controller.signal);
-        if (generation !== messageGeneration.current) return;
+        if (generation !== messageGeneration.current || read !== messageReads.current) return;
         setThreadDetail(page.thread);
         setMessages(old => merge(old,page.messages).sort((a,b) => a.activity_at.localeCompare(b.activity_at) || a.id.localeCompare(b.id)));
         if (first) setMessageCursor(page.nextCursor);
@@ -199,6 +203,27 @@ export function App({navigate,user,onLogout,logoutBusy}: {navigate:(path:string)
     } catch (e) { if (generation === listGeneration.current) setError((e as Error).message); }
     finally { if (generation === listGeneration.current) setMoreBusy(false); }
   },[inboxPath,threadCursor]);
+  const refreshConversation = async () => {
+    const generation = messageGeneration.current, read=++messageReads.current;
+    const page = await get<MessagePage>(messagePath);
+    if (generation !== messageGeneration.current || read !== messageReads.current) return;
+    setThreadDetail(page.thread);
+    const pages=[page];
+    let cursor=page.nextCursor;
+    // Include previously loaded older messages when refreshing their actions.
+    while(cursor && pages.flatMap(p=>p.messages).length<messages.length) {
+      const older=await get<MessagePage>(`${messagePath}&cursor=${encodeURIComponent(cursor)}`);
+      if(generation!==messageGeneration.current||read!==messageReads.current)return;
+      pages.push(older);cursor=older.nextCursor;
+    }
+    const refreshed=pages.flatMap(p=>p.messages).sort((a,b)=>a.activity_at.localeCompare(b.activity_at)||a.id.localeCompare(b.id));
+    setMessages(refreshed);
+    setMessageCursor(cursor);
+    const data=await get<{auras:Aura[]}>('/api/auras');
+    if(generation!==messageGeneration.current)return;
+    setAuras(data.auras);
+    return refreshed;
+  };
   const moreMessages = async () => {
     const generation = messageGeneration.current;
     try {
@@ -244,7 +269,7 @@ export function App({navigate,user,onLogout,logoutBusy}: {navigate:(path:string)
         </section>
         <section className="conversation-panel" aria-label="Message view">
           {!threadId ? <div className="conversation-empty"><Icon name="mail" size={32}/><h2>Select a conversation</h2><p>{aura?.tier ? `Tier ${aura.tier} · ${TIER_LABELS[aura.tier]}` : 'Messages for this Aura open here.'}</p></div>
-            : <><div className="conversation-header"><button className="back-button" aria-label="Back to conversations" onClick={() => setThreadId('')}><Icon name="back"/></button><h2>{threadDetail?.subject || (loadingMessages ? 'Loading conversation…' : '(No subject)')}</h2>{threadDetail && <span className={`status-tag ${threadDetail.inbox_status}`}>{threadDetail.inbox_status}</span>}</div><div className="message-list">{messageError && <div className="error-box" role="alert">{messageError}<button onClick={() => setRefreshKey(n => n+1)}>Try again</button></div>}{loadingMessages && <div className="list-empty">Loading messages…</div>}{messageCursor && <button className="load-more" onClick={moreMessages}>Load earlier messages</button>}{messages.map(m => <MessageCard key={m.id} message={m} auraId={auraId}/>)}</div><div className="conversation-footer"><button className="secondary-button" onClick={()=>navigate(`/governance?aura=${auraId}`)}>Review drafts and policy</button></div></>}
+            : <><div className="conversation-header"><button className="back-button" aria-label="Back to conversations" onClick={() => setThreadId('')}><Icon name="back"/></button><h2>{threadDetail?.subject || (loadingMessages ? 'Loading conversation…' : '(No subject)')}</h2>{threadDetail && <span className={`status-tag ${threadDetail.inbox_status}`}>{threadDetail.inbox_status}</span>}</div><div className="message-list">{messageError && <div className="error-box" role="alert">{messageError}<button onClick={() => setRefreshKey(n => n+1)}>Try again</button></div>}{loadingMessages && <div className="list-empty">Loading messages…</div>}{messageCursor && <button className="load-more" onClick={moreMessages}>Load earlier messages</button>}{messages.map(m => <MessageCard key={`${auraId}:${m.id}`} message={m} auraId={auraId} onRefresh={refreshConversation}/>)}</div><div className="conversation-footer"><button className="secondary-button" onClick={()=>navigate(`/governance?aura=${auraId}`)}>Review drafts and policy</button></div></>}
         </section>
       </div>
     </main>
