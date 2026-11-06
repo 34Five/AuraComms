@@ -1,3 +1,4 @@
+import { ReviewHistory } from './ReviewHistory';
 import { DraftReview, type ReviewMessage } from './DraftReview';
 import { workspaceFetch, type User } from './auth';
 import { TIER_LABELS } from './GovernancePanel';
@@ -93,6 +94,7 @@ function MessageCard({ message: m, auraId, onRefresh }: { message: Message; aura
     {error && <p className="inline-error" role="alert">{error}</p>}
     {m.attachments.length > 0 && <div className="attachments">{m.attachments.map(a => <a key={a.id} href={`/api/auras/${auraId}/messages/${m.id}/attachments/${a.id}`} className="attachment"><Icon name="attachment" size={16}/><span>{a.filename || 'Attachment'}<small>{Math.max(1,Math.round(a.size_bytes/1024))} KB</small></span></a>)}</div>}
     <DraftReview message={m} auraId={auraId} onRefresh={async()=> (await onRefresh())?.find(message=>message.id===m.id)}/>
+    {m.direction==='out' && <ReviewHistory key={`${auraId}:${m.id}`} auraId={auraId} messageId={m.id} changeKey={JSON.stringify([m.status,m.review?.id,m.review?.status,m.review?.decided_at,m.review?.edited_before_send])}/>}
     {state === 'normal' && <div className="message-status">{(m.direction==='in'||m.status==='sent')&&<Icon name="check" size={13}/>} {m.direction === 'in' ? 'Received' : m.status}</div>}
   </article>;
 }
